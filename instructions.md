@@ -21,7 +21,7 @@ mcp-marketplace-search/
 │   ├── conftest.py          # Fixtures: temp_db, reset_providers, sample_items
 │   ├── test_types.py        # 20 tests — enums, dataclasses, defaults
 │   ├── test_db.py           # 19 tests — CRUD, thread safety, singleton
-│   ├── test_providers.py    # 33 tests — health, registry, routing, per-provider
+│   ├── test_providers.py    # 87 tests — health, registry, routing, per-provider, ApifyProvider (8 actors)
 │   └── test_tools.py        # 9 tests — formatting, registration, search logic
 ├── data/                    # SQLite DB (auto-created)
 ├── pyproject.toml           # Dependencies + test config
@@ -217,7 +217,7 @@ This MCP server is the **search infrastructure** for VintedFlip project.
   - `2e4483a` — v1.0.0 (16 files, 4017 lines)
   - `4b08c3a` — docs: roadmap, session log, test documentation
   - `99289d4` — feat: ApifyProvider as cloud scraping fallback (v1.2)
-  - `(pending)` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
+  - `b9ff83b` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
 
 ## Created
 
