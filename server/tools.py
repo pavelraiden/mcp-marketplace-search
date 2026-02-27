@@ -1,7 +1,7 @@
 """MCP tools for marketplace search.
 
-13 tools total:
-- 6 search_* tools (one per marketplace + apify meta-provider)
+16 tools total:
+- 9 search_* tools (6 direct + 3 Apify-only: allegro, olx, stockx)
 - 3 orchestrator tools (search_all, search_smart, marketplace_health)
 - 2 item tools (get_item, compare_prices)
 - 2 utility tools (search_history, list_marketplaces)
@@ -135,10 +135,10 @@ def _search_marketplace(
 # =============================================================================
 
 def register_tools(mcp: FastMCP):
-    """Register all 13 tools with the MCP server."""
+    """Register all 16 tools with the MCP server."""
 
     # =========================================================================
-    # 6 MARKETPLACE SEARCH TOOLS
+    # 9 MARKETPLACE SEARCH TOOLS (6 direct + 3 Apify-only)
     # =========================================================================
 
     @mcp.tool()
@@ -247,16 +247,18 @@ def register_tools(mcp: FastMCP):
         max_price: float = 0,
         limit: int = 20,
     ) -> str:
-        """Search via Apify cloud scraping (fallback provider).
+        """Search via Apify cloud scraping (meta-provider for 8 marketplaces).
         Uses Apify Actors to scrape marketplaces in the cloud.
         No cookies/auth needed for target marketplace — only APIFY_API_TOKEN.
 
         target_marketplace: which marketplace to scrape via Apify.
-            Supported: vinted (default), grailed. More coming soon.
+            Supported: vinted (default), grailed, ebay, vestiaire, depop,
+            allegro, olx, stockx.
         limit: max items to return (default 20).
 
-        Use this when direct marketplace scraping fails (cookies expired, rate limited).
-        Requires APIFY_API_TOKEN env var ($29/mo Apify plan)."""
+        Primary method for all marketplace scraping. Also serves as fallback
+        when direct API access fails (cookies expired, rate limited).
+        Requires APIFY_API_TOKEN env var."""
         db = get_db()
         provider = get_provider("apify")
 
@@ -325,6 +327,136 @@ def register_tools(mcp: FastMCP):
             output += "\n\n[TRUNCATED]"
 
         return output
+
+    # =========================================================================
+    # 3 APIFY-ONLY MARKETPLACE SEARCH TOOLS (Allegro, OLX, StockX)
+    # =========================================================================
+
+    def _search_via_apify(
+        target_marketplace: str,
+        display_name: str,
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+        region: str = "",
+    ) -> str:
+        """Helper: search a marketplace through Apify meta-provider."""
+        db = get_db()
+        provider = get_provider("apify")
+
+        if not provider.is_available():
+            return (
+                "ERROR: Apify is not configured.\n"
+                "Set APIFY_API_TOKEN environment variable.\n"
+                "Get a token at https://console.apify.com/account/integrations"
+            )
+
+        params = SearchParams(
+            query=query,
+            category=target_marketplace,
+            brand=brand,
+            min_price=min_price,
+            max_price=max_price,
+            limit=limit,
+            region=region,
+        )
+
+        try:
+            result = provider.search(params)
+        except Exception as e:
+            error_msg = f"ERROR: {display_name} search failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return error_msg
+
+        # Save to DB
+        search_id = db.save_search(
+            query=query,
+            marketplace=f"apify:{target_marketplace}",
+            brand=brand or None,
+            min_price=min_price if min_price > 0 else None,
+            max_price=max_price if max_price > 0 else None,
+            total_results=result.total_found,
+            items_returned=len(result.items),
+            duration_ms=result.duration_ms,
+        )
+        if result.items:
+            db.save_search_items(search_id, [item.to_dict() for item in result.items])
+
+        # Format output
+        output = f"## {display_name} Search Results (via Apify)\n\n"
+        output += f"**Query:** {query}"
+        if brand:
+            output += f" | **Brand:** {brand}"
+        if min_price > 0 or max_price > 0:
+            output += f" | **Price:** {min_price or '?'}-{max_price or '?'}"
+        output += f"\n**Found:** {result.total_found} items | "
+        output += f"**Showing:** {len(result.items)} | "
+        output += f"**Time:** {result.duration_ms}ms\n"
+        output += f"**Search ID:** `{search_id}`\n\n"
+
+        output += _format_items(result.items, max_items=limit)
+
+        if len(output) > MAX_OUTPUT_CHARS:
+            output = output[:MAX_OUTPUT_CHARS]
+            output += "\n\n[TRUNCATED]"
+
+        return output
+
+    @mcp.tool()
+    def search_allegro(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+        region: str = "PL",
+    ) -> str:
+        """Search Allegro — largest e-commerce in Poland/CEE.
+        Millions of listings: fashion, electronics, home, kids, sports.
+        Powered by Apify cloud scraping. Requires APIFY_API_TOKEN.
+        Region: PL (default), CZ, SK, HU."""
+        return _search_via_apify(
+            "allegro", "Allegro", query, brand,
+            min_price, max_price, limit, region,
+        )
+
+    @mcp.tool()
+    def search_olx(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+        region: str = "PL",
+    ) -> str:
+        """Search OLX classifieds — local deals in CEE/Europe.
+        Multi-country classifieds: electronics, furniture, clothing, everything.
+        Powered by Apify cloud scraping. Requires APIFY_API_TOKEN.
+        Region: PL (default), UA, RO, PT, BG."""
+        return _search_via_apify(
+            "olx", "OLX", query, brand,
+            min_price, max_price, limit, region,
+        )
+
+    @mcp.tool()
+    def search_stockx(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+    ) -> str:
+        """Search StockX — stock exchange for sneakers and collectibles.
+        Bid/Ask system with physical authentication guarantee.
+        Categories: sneakers, shoes, apparel, accessories, collectibles, electronics.
+        Powered by Apify cloud scraping. Requires APIFY_API_TOKEN.
+        Best for: Jordan, Yeezy, Nike Dunk, Supreme, trading cards."""
+        return _search_via_apify(
+            "stockx", "StockX", query, brand,
+            min_price, max_price, limit,
+        )
 
     # =========================================================================
     # 3 ORCHESTRATOR TOOLS
@@ -570,7 +702,7 @@ def register_tools(mcp: FastMCP):
         item_id: str,
     ) -> str:
         """Get detailed information about a specific item.
-        marketplace: vinted, ebay, grailed, vestiaire, depop
+        marketplace: vinted, ebay, grailed, vestiaire, depop, apify, allegro, olx, stockx
         item_id: the item's ID on that marketplace."""
         if marketplace not in VALID_MARKETPLACES:
             return f"ERROR: Unknown marketplace '{marketplace}'. Use: {', '.join(VALID_MARKETPLACES)}"

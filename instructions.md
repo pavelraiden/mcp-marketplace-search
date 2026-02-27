@@ -1,8 +1,9 @@
 # MCP Marketplace Search Server
 
 ## Overview
-MCP сервер для поиска товаров на 5 маркетплейсах через Claude Code.
+MCP сервер для поиска товаров на 9 маркетплейсах (5 direct + 3 Apify-only + Apify meta-provider) через Claude Code.
 Архитектура 1:1 с mcp-multi-ai — тот же паттерн FastMCP + STDIO + BaseProvider.
+ApifyProvider поддерживает 8 marketplace actors — primary cloud scraping engine.
 
 ## Architecture
 
@@ -13,8 +14,8 @@ mcp-marketplace-search/
 │   ├── __main__.py          # python -m server entrypoint
 │   ├── main.py              # FastMCP entry point (78 lines)
 │   ├── types.py             # Shared types: SearchParams, MarketplaceItem, SearchResult (~199 lines)
-│   ├── providers.py         # BaseMarketplaceProvider + 5 implementations (~1296 lines)
-│   ├── tools.py             # 12 MCP tools registration (~674 lines)
+│   ├── providers.py         # BaseMarketplaceProvider + 6 implementations (~1950 lines)
+│   ├── tools.py             # 16 MCP tools registration (~870 lines)
 │   └── db.py                # Thread-safe SQLite persistence (~310 lines)
 ├── tests/
 │   ├── conftest.py          # Fixtures: temp_db, reset_providers, sample_items
@@ -32,7 +33,7 @@ mcp-marketplace-search/
 ## Tests
 
 ```bash
-# Run all 108 tests
+# Run all 154 tests
 uv run --with pytest --with pytest-cov pytest tests/ -v
 
 # With coverage
@@ -43,9 +44,9 @@ uv run --with pytest --with pytest-cov pytest tests/ -v --cov=server --cov-repor
 |:-----|------:|:---------|
 | test_types.py | 20 | Enums, dataclasses, defaults, mutable safety |
 | test_db.py | 19 | CRUD, history, stats, cleanup, threads, singleton |
-| test_providers.py | 33 | Health, registry, routing, instantiation, behavior |
+| test_providers.py | 87 | Health, registry, routing, instantiation, behavior, ApifyProvider (8 actors, 30+ new) |
 | test_tools.py | 9 | Formatting, registration, search mocking |
-| **Total** | **108** | **All passing** |
+| **Total** | **154** | **All passing** |
 
 ## Marketplaces
 
@@ -56,15 +57,23 @@ uv run --with pytest --with pytest-cov pytest tests/ -v --cov=server --cov-repor
 | Grailed | Algolia Key | Scraping | Menswear, streetwear |
 | Vestiaire | Cookie | Scraping | Luxury, authenticated |
 | Depop | Cookie | Scraping | Vintage, Gen-Z |
+| **Allegro** | via Apify | Cloud Actor | CEE, PL/CZ/SK, electronics |
+| **OLX** | via Apify | Cloud Actor | Classifieds, PL/UA/RO/PT/BG |
+| **StockX** | via Apify | Cloud Actor | Sneakers, authenticated, market data |
+| **Apify** | API Token ($29/mo) | 8 Cloud Actors | **Multi-marketplace**, no cookies needed |
 
-## Tools (12)
+## Tools (16)
 
-### Search (5)
+### Search (9)
 - `search_vinted` — Search Vinted (EU fashion)
 - `search_ebay` — Search eBay (global, everything)
 - `search_grailed` — Search Grailed (streetwear/designer)
 - `search_vestiaire` — Search Vestiaire (luxury)
 - `search_depop` — Search Depop (vintage/unique)
+- `search_allegro` — Search Allegro (PL/CZ/SK, via Apify)
+- `search_olx` — Search OLX classifieds (PL/UA/RO/PT/BG, via Apify)
+- `search_stockx` — Search StockX (sneakers/streetwear, via Apify)
+- `search_apify` — Cloud scraping via 8 Apify actors (vinted, grailed, ebay, vestiaire, depop, allegro, olx, stockx)
 
 ### Orchestrator (3)
 - `search_all` — Parallel search across multiple marketplaces
@@ -81,6 +90,19 @@ uv run --with pytest --with pytest-cov pytest tests/ -v --cov=server --cov-repor
 
 ## Adding a New Marketplace
 
+### Option A: Apify-only (RECOMMENDED — no API keys needed)
+1. Find Apify actor for the marketplace on https://apify.com/store
+2. Add entry to `ApifyProvider.ACTOR_MAP` dict
+3. Add `_build_actor_input_{name}()` case in `_build_actor_input()`
+4. Add `_parse_{name}_result()` parser method
+5. Add routing in `_parse_result()`
+6. Add entry to `MARKETPLACE_REGISTRY`
+7. Add to `CATEGORY_ROUTING` for relevant categories
+8. Add to `VALID_MARKETPLACES`
+9. Add `search_{name}` tool in `tools.py` (use `_search_via_apify` helper)
+10. Write tests for input builder + parser + registry
+
+### Option B: Direct Provider (with API key)
 1. Create class in `server/providers.py` extending `BaseMarketplaceProvider`
 2. Set: `name`, `display_name`, `base_url`, `api_key_env`
 3. Implement `_do_search(params: SearchParams) -> SearchResult`
@@ -118,6 +140,7 @@ EBAY_APP_SECRET=<ebay_client_secret>
 GRAILED_ALGOLIA_KEY=<algolia_key_or_auto>
 VESTIAIRE_COOKIE=<session_cookie>
 DEPOP_COOKIE=<session_cookie>
+APIFY_API_TOKEN=<apify_api_token>  # $29/mo plan, https://console.apify.com/account/integrations
 ```
 
 ## Relation to VintedFlip
@@ -146,14 +169,33 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - [ ] Fix any API response parsing issues found
 - [ ] Integration tests with real endpoints
 
-### v1.2 — New Marketplaces
-- [ ] Apify integration as fallback provider (user has $29/mo plan)
+### v1.2 — Apify Fallback (DONE ✅)
+- [x] ApifyProvider as cloud scraping fallback
+- [x] Vinted + Grailed Apify Actors configured
+- [x] search_apify tool with target_marketplace parameter
+- [x] CATEGORY_ROUTING updated with apify as last fallback
+- [x] 22 new tests (130 total, all passing)
+- [x] 5 bugs fixed in initial implementation
+
+### v1.3 — Apify Multi-Marketplace Expansion (DONE ✅)
+- [x] ApifyProvider ACTOR_MAP: 2 → 8 actors (vinted, grailed, ebay, vestiaire, depop, allegro, olx, stockx)
+- [x] Upgraded grailed actor: benthepythondev → vmscrapers/grailed (43 users, richer data)
+- [x] 6 new parsers: ebay, vestiaire, depop, allegro, olx, stockx
+- [x] 7 new input builders with marketplace-specific logic (URL-based vs param-based)
+- [x] 3 new Apify-only marketplaces: Allegro (CEE), OLX (classifieds), StockX (sneakers)
+- [x] 3 new search tools: search_allegro, search_olx, search_stockx
+- [x] MARKETPLACE_REGISTRY: 6 → 9 entries
+- [x] CATEGORY_ROUTING updated with new marketplaces
+- [x] ~30 new tests (154 total, all passing)
+- [x] 830 insertions across 5 files
+
+### v1.4 — More Marketplaces
 - [ ] Mercari (US resale)
 - [ ] Poshmark (US fashion)
 - [ ] Wallapop (Spain/EU)
 - [ ] Template: `docs/adding-marketplace.md` with step-by-step
 
-### v1.3 — Deploy & Production
+### v1.5 — Deploy & Production
 - [ ] Docker container + compose
 - [ ] Deploy to user's server (root access available)
 - [ ] Health monitoring endpoint
@@ -171,7 +213,11 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 
 - **Repo:** `pavelraiden/mcp-marketplace-search` (private)
 - **Branch:** `master`
-- **Initial commit:** `2e4483a` — v1.0.0 (16 files, 4017 lines)
+- **Commits:**
+  - `2e4483a` — v1.0.0 (16 files, 4017 lines)
+  - `4b08c3a` — docs: roadmap, session log, test documentation
+  - `99289d4` — feat: ApifyProvider as cloud scraping fallback (v1.2)
+  - `(pending)` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
 
 ## Created
 
@@ -179,3 +225,5 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - **Based on:** mcp-multi-ai architecture pattern
 - **Session:** VintedFlip session 9 (deep self-learning + MCP marketplace server)
 - **Deep audit:** Session 10 (108 tests, bug fixes, git init)
+- **Apify provider:** Session 11 (ApifyProvider + 22 tests, 130 total)
+- **Apify expansion:** Session 12 (8 actors, 3 new marketplaces, 154 total tests)

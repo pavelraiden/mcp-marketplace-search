@@ -116,9 +116,9 @@ class TestProviderHealth:
 # =============================================================================
 
 class TestMarketplaceRegistry:
-    def test_all_6_marketplaces_registered(self):
-        assert len(MARKETPLACE_REGISTRY) == 6
-        expected = {"vinted", "ebay", "grailed", "vestiaire", "depop", "apify"}
+    def test_all_9_marketplaces_registered(self):
+        assert len(MARKETPLACE_REGISTRY) == 9
+        expected = {"vinted", "ebay", "grailed", "vestiaire", "depop", "apify", "allegro", "olx", "stockx"}
         assert set(MARKETPLACE_REGISTRY.keys()) == expected
 
     def test_vinted_capabilities(self):
@@ -194,8 +194,8 @@ class TestCategoryRouting:
 # =============================================================================
 
 class TestProviderClasses:
-    def test_6_provider_classes(self):
-        assert len(PROVIDER_CLASSES) == 6
+    def test_provider_classes_count(self):
+        assert len(PROVIDER_CLASSES) == 6  # 5 direct + 1 ApifyProvider (meta)
 
     def test_all_have_required_attrs(self):
         for cls in PROVIDER_CLASSES:
@@ -205,10 +205,15 @@ class TestProviderClasses:
             assert hasattr(cls, "api_key_env")
             assert cls.name != "", f"{cls.__name__} has empty name"
 
-    def test_provider_names_match_registry(self):
+    def test_provider_names_subset_of_registry(self):
+        """Provider classes are a subset of registry (allegro/olx/stockx are Apify-only)."""
         provider_names = {cls.name for cls in PROVIDER_CLASSES}
         registry_names = set(MARKETPLACE_REGISTRY.keys())
-        assert provider_names == registry_names
+        # All provider names should be in registry
+        assert provider_names.issubset(registry_names)
+        # Apify-only marketplaces don't have their own Provider class
+        apify_only = {"allegro", "olx", "stockx"}
+        assert apify_only.issubset(registry_names - provider_names)
 
     def test_valid_marketplaces_matches(self):
         assert set(VALID_MARKETPLACES) == set(MARKETPLACE_REGISTRY.keys())
@@ -269,7 +274,7 @@ class TestProviderRegistry:
 
     def test_get_providers_returns_all(self):
         providers = get_providers()
-        assert len(providers) == 6
+        assert len(providers) == 6  # 6 Provider classes (allegro/olx/stockx are Apify-only)
         assert "vinted" in providers
         assert "ebay" in providers
         assert "apify" in providers
@@ -483,18 +488,21 @@ class TestApifyProvider:
         p._token = ""
         assert p.is_available() is False
 
-    def test_actor_map_has_vinted_and_grailed(self):
-        assert "vinted" in ApifyProvider.ACTOR_MAP
-        assert "grailed" in ApifyProvider.ACTOR_MAP
+    def test_actor_map_has_8_marketplaces(self):
+        expected = {"vinted", "grailed", "ebay", "vestiaire", "depop", "allegro", "olx", "stockx"}
+        assert set(ApifyProvider.ACTOR_MAP.keys()) == expected
         assert ApifyProvider.ACTOR_MAP["vinted"] == "bebity/vinted-premium-actor"
-        assert ApifyProvider.ACTOR_MAP["grailed"] == "benthepythondev/grailed-scraper"
+        assert ApifyProvider.ACTOR_MAP["grailed"] == "vmscrapers/grailed"
+        assert ApifyProvider.ACTOR_MAP["ebay"] == "dtrungtin/ebay-items-scraper"
+        assert ApifyProvider.ACTOR_MAP["allegro"] == "tri_angle/allegro-fast-product-scraper"
+        assert ApifyProvider.ACTOR_MAP["stockx"] == "ecomscrape/stockx-product-search-scraper"
 
     def test_get_supported_marketplaces(self):
         p = ApifyProvider()
         supported = p.get_supported_marketplaces()
-        assert "vinted" in supported
-        assert "grailed" in supported
-        assert isinstance(supported, list)
+        assert len(supported) == 8
+        for m in ["vinted", "grailed", "ebay", "vestiaire", "depop", "allegro", "olx", "stockx"]:
+            assert m in supported
 
     def test_build_actor_input_vinted(self):
         p = ApifyProvider()
@@ -530,10 +538,11 @@ class TestApifyProvider:
             limit=10,
         )
         inp = p._build_actor_input("grailed", params)
-        assert inp["searchQuery"] == "rick owens"
-        assert inp["maxItems"] == 10
-        assert inp["minPrice"] == 50.0
-        assert inp["maxPrice"] == 500.0
+        # vmscrapers/grailed uses URL-based input
+        assert "startUrls" in inp
+        assert len(inp["startUrls"]) == 1
+        assert "grailed.com/shop" in inp["startUrls"][0]["url"]
+        assert "rick+owens" in inp["startUrls"][0]["url"]
 
     def test_build_actor_input_generic(self):
         p = ApifyProvider()
@@ -674,7 +683,8 @@ class TestApifyProvider:
         assert cap.has_api is True
         assert cap.requires_auth == "api_key"
         assert "cloud_scraping" in cap.strengths
-        assert "fallback" in cap.strengths
+        assert "multi_marketplace" in cap.strengths
+        assert "8_actors" in cap.strengths
 
     def test_valid_marketplaces_includes_apify(self):
         assert "apify" in VALID_MARKETPLACES
@@ -686,3 +696,284 @@ class TestApifyProvider:
             if any(m == "apify" for m, r in chain)
         ]
         assert len(categories_with_apify) >= 5  # At least 5 categories have apify
+
+    # --- eBay actor input/parser tests ---
+
+    def test_build_actor_input_ebay(self):
+        p = ApifyProvider()
+        params = SearchParams(
+            query="nike shoes",
+            min_price=50.0,
+            max_price=200.0,
+            limit=15,
+            region="US",
+        )
+        inp = p._build_actor_input("ebay", params)
+        assert "startUrls" in inp
+        assert "ebay.com" in inp["startUrls"][0]["url"]
+        assert "nike+shoes" in inp["startUrls"][0]["url"]
+        assert inp["maxItems"] == 15
+
+    def test_build_actor_input_ebay_uk(self):
+        p = ApifyProvider()
+        params = SearchParams(query="trainers", limit=10, region="UK")
+        inp = p._build_actor_input("ebay", params)
+        assert "ebay.co.uk" in inp["startUrls"][0]["url"]
+
+    def test_parse_ebay_result(self):
+        p = ApifyProvider()
+        raw = {
+            "itemNumber": "123456789",
+            "title": "Nike Air Max 90 White",
+            "url": "https://www.ebay.com/itm/123456789",
+            "price": 89.99,
+            "currency": "USD",
+            "brand": "Nike",
+            "condition": "New",
+            "image": "https://i.ebayimg.com/photo.jpg",
+            "seller": "shoe_dealer",
+            "itemLocation": "New York, US",
+        }
+        item = p._parse_ebay_result(raw)
+        assert item.item_id == "123456789"
+        assert item.marketplace == "ebay"
+        assert item.price == 89.99
+        assert item.brand == "Nike"
+        assert item.seller_name == "shoe_dealer"
+
+    # --- Vestiaire actor input/parser tests ---
+
+    def test_build_actor_input_vestiaire(self):
+        p = ApifyProvider()
+        params = SearchParams(query="gucci bag", brand="Gucci", limit=10)
+        inp = p._build_actor_input("vestiaire", params)
+        assert "startUrls" in inp
+        assert "vestiairecollective.com" in inp["startUrls"][0]
+        assert inp["maxItems"] == 10
+
+    def test_parse_vestiaire_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "vc_001",
+            "name": "Gucci Marmont Bag",
+            "url": "https://www.vestiairecollective.com/product/vc_001",
+            "price": {"amount": 850.0, "currency": "EUR"},
+            "brand": {"name": "Gucci"},
+            "condition": "Very good",
+            "pictures": [{"url": "https://img.vc.com/photo.jpg"}],
+            "seller": {"username": "luxury_seller", "country": "France"},
+        }
+        item = p._parse_vestiaire_result(raw)
+        assert item.item_id == "vc_001"
+        assert item.marketplace == "vestiaire"
+        assert item.price == 850.0
+        assert item.brand == "Gucci"
+        assert item.seller_name == "luxury_seller"
+
+    def test_parse_vestiaire_result_flat_price(self):
+        """Handle flat price (not dict)."""
+        p = ApifyProvider()
+        raw = {"id": "1", "name": "Test", "url": "u", "price": 100.0}
+        item = p._parse_vestiaire_result(raw)
+        assert item.price == 100.0
+
+    # --- Depop actor input/parser tests ---
+
+    def test_build_actor_input_depop(self):
+        p = ApifyProvider()
+        params = SearchParams(query="vintage nike", brand="Nike", limit=20)
+        inp = p._build_actor_input("depop", params)
+        assert inp["searchQueries"] == ["Nike vintage nike"]
+        assert inp["maxResults"] == 20
+
+    def test_parse_depop_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "dep_001",
+            "description": "Vintage Nike windbreaker from the 90s",
+            "url": "https://www.depop.com/products/dep_001",
+            "price": {"amount": 35.0, "currency": "GBP"},
+            "brand": "Nike",
+            "size": "M",
+            "condition": "good",
+            "images": [{"url": "https://img.depop.com/photo.jpg"}],
+            "seller": {"username": "vintage_finds"},
+            "likes": 42,
+        }
+        item = p._parse_depop_result(raw)
+        assert item.item_id == "dep_001"
+        assert item.marketplace == "depop"
+        assert item.price == 35.0
+        assert item.brand == "Nike"
+        assert item.favorites == 42
+
+    # --- Allegro actor input/parser tests ---
+
+    def test_build_actor_input_allegro(self):
+        p = ApifyProvider()
+        params = SearchParams(query="buty nike", limit=10)
+        inp = p._build_actor_input("allegro", params)
+        assert inp["search"] == "buty nike"
+        assert inp["searchDomain"] == "allegro.pl"
+        assert inp["maxProducts"] == 10
+
+    def test_build_actor_input_allegro_cz(self):
+        p = ApifyProvider()
+        params = SearchParams(query="boty", limit=5, region="CZ")
+        inp = p._build_actor_input("allegro", params)
+        assert inp["searchDomain"] == "allegro.cz"
+
+    def test_parse_allegro_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "alg_001",
+            "name": "Nike Air Force 1 białe",
+            "url": "https://allegro.pl/oferta/alg_001",
+            "price": {"amount": 399.0, "currency": "PLN"},
+            "images": [{"url": "https://img.allegro.pl/photo.jpg"}],
+            "seller": {"login": "sklep_sportowy"},
+            "location": "Warszawa",
+        }
+        item = p._parse_allegro_result(raw)
+        assert item.item_id == "alg_001"
+        assert item.marketplace == "allegro"
+        assert item.price == 399.0
+        assert item.currency == "PLN"
+        assert item.seller_name == "sklep_sportowy"
+
+    # --- OLX actor input/parser tests ---
+
+    def test_build_actor_input_olx(self):
+        p = ApifyProvider()
+        params = SearchParams(query="iphone 15", min_price=1000, max_price=3000, limit=10)
+        inp = p._build_actor_input("olx", params)
+        assert "startUrls" in inp
+        assert "olx.pl" in inp["startUrls"][0]
+        assert inp["maxItems"] == 10
+        assert inp["priceMin"] == 1000
+        assert inp["priceMax"] == 3000
+
+    def test_build_actor_input_olx_ukraine(self):
+        p = ApifyProvider()
+        params = SearchParams(query="ноутбук", limit=10, region="UA")
+        inp = p._build_actor_input("olx", params)
+        assert "olx.ua" in inp["startUrls"][0]
+
+    def test_parse_olx_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "olx_001",
+            "name": "iPhone 15 Pro 256GB",
+            "url": "https://www.olx.pl/d/oferta/olx_001",
+            "price": 4500.0,
+            "currency": "PLN",
+            "images": ["https://img.olx.pl/photo.jpg"],
+            "location": "Kraków",
+            "seller": {"name": "jan_kowalski"},
+        }
+        item = p._parse_olx_result(raw)
+        assert item.item_id == "olx_001"
+        assert item.marketplace == "olx"
+        assert item.price == 4500.0
+        assert item.location == "Kraków"
+
+    def test_parse_olx_result_string_price(self):
+        """OLX sometimes returns price as string like '4 500 zł'."""
+        p = ApifyProvider()
+        raw = {"id": "1", "name": "Test", "url": "u", "price": "4500.00"}
+        item = p._parse_olx_result(raw)
+        assert item.price == 4500.0
+
+    # --- StockX actor input/parser tests ---
+
+    def test_build_actor_input_stockx(self):
+        p = ApifyProvider()
+        params = SearchParams(query="jordan 4 retro", brand="Nike", limit=15)
+        inp = p._build_actor_input("stockx", params)
+        assert inp["keyword"] == "Nike jordan 4 retro"
+        assert inp["maxItems"] == 15
+
+    def test_parse_stockx_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "stx_001",
+            "name": "Jordan 4 Retro Black Cat",
+            "url": "https://stockx.com/jordan-4-retro-black-cat",
+            "retailPrice": 200.0,
+            "currency": "USD",
+            "brand": "Nike",
+            "condition": "New",
+            "images": ["https://img.stockx.com/photo.jpg"],
+            "category": "sneakers",
+        }
+        item = p._parse_stockx_result(raw)
+        assert item.item_id == "stx_001"
+        assert item.marketplace == "stockx"
+        assert item.price == 200.0
+        assert item.brand == "Nike"
+        assert item.category == "sneakers"
+
+    def test_parse_stockx_result_lastSale(self):
+        """StockX may return lastSale instead of retailPrice."""
+        p = ApifyProvider()
+        raw = {"id": "1", "name": "Test", "url": "u", "lastSale": 180.0}
+        item = p._parse_stockx_result(raw)
+        assert item.price == 180.0
+
+    # --- Parse result routing with new marketplaces ---
+
+    def test_parse_result_routes_new_marketplaces(self):
+        p = ApifyProvider()
+        ebay_raw = {"itemNumber": "1", "title": "E", "price": 10, "url": "u"}
+        allegro_raw = {"id": "2", "name": "A", "price": 20, "url": "u"}
+        stockx_raw = {"id": "3", "name": "S", "retailPrice": 30, "url": "u"}
+
+        e = p._parse_result(ebay_raw, "ebay")
+        assert e.marketplace == "ebay"
+
+        a = p._parse_result(allegro_raw, "allegro")
+        assert a.marketplace == "allegro"
+
+        s = p._parse_result(stockx_raw, "stockx")
+        assert s.marketplace == "stockx"
+
+    # --- Registry tests for new marketplaces ---
+
+    def test_allegro_in_registry(self):
+        assert "allegro" in MARKETPLACE_REGISTRY
+        cap = MARKETPLACE_REGISTRY["allegro"]
+        assert "PL" in cap.regions
+        assert "electronics" in cap.categories
+        assert "CEE_coverage" in cap.strengths
+
+    def test_olx_in_registry(self):
+        assert "olx" in MARKETPLACE_REGISTRY
+        cap = MARKETPLACE_REGISTRY["olx"]
+        assert "PL" in cap.regions
+        assert "UA" in cap.regions
+        assert "classifieds" in cap.strengths
+
+    def test_stockx_in_registry(self):
+        assert "stockx" in MARKETPLACE_REGISTRY
+        cap = MARKETPLACE_REGISTRY["stockx"]
+        assert "US" in cap.regions
+        assert "shoes" in cap.categories
+        assert "sneakers" in cap.strengths
+
+    def test_valid_marketplaces_includes_new(self):
+        for m in ["allegro", "olx", "stockx"]:
+            assert m in VALID_MARKETPLACES
+
+    def test_category_routing_includes_new_marketplaces(self):
+        """New marketplaces should appear in relevant category routing."""
+        # StockX should be in shoes routing
+        shoes_chain = [m for m, r in CATEGORY_ROUTING["shoes"]]
+        assert "stockx" in shoes_chain
+
+        # Allegro should be in electronics routing
+        elec_chain = [m for m, r in CATEGORY_ROUTING["electronics"]]
+        assert "allegro" in elec_chain
+
+        # OLX should be in furniture routing
+        furn_chain = [m for m, r in CATEGORY_ROUTING["furniture"]]
+        assert "olx" in furn_chain

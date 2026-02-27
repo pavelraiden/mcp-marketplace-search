@@ -2,17 +2,18 @@
 
 Architecture mirrors multi-ai MCP:
 - BaseMarketplaceProvider (abstract) with health tracking + circuit breaker
-- Concrete providers: Vinted, eBay, Grailed, Vestiaire, Depop
+- Concrete providers: Vinted, eBay, Grailed, Vestiaire, Depop (direct API/scraping)
+- ApifyProvider: meta-provider for 8 marketplaces via Apify cloud actors
+- 9 total marketplaces: Vinted, eBay, Grailed, Vestiaire, Depop + Allegro, OLX, StockX
 - Provider registry with lazy initialization
 - Category-based smart routing
 
-Adding a new marketplace:
-1. Create a class extending BaseMarketplaceProvider
-2. Set name, display_name, api_key_env, base_url
-3. Implement search() and get_item()
-4. Add to PROVIDER_CLASSES list
-5. Add to MARKETPLACE_REGISTRY and CATEGORY_ROUTING
-6. Set API key in environment
+Adding a new marketplace via Apify:
+1. Find the Apify Actor at apify.com/store
+2. Add actor ID to ApifyProvider.ACTOR_MAP
+3. Add _build_actor_input() case
+4. Add _parse_*_result() method
+5. Add to MARKETPLACE_REGISTRY, CATEGORY_ROUTING, VALID_MARKETPLACES
 """
 
 import os
@@ -91,9 +92,43 @@ MARKETPLACE_REGISTRY: dict[str, MarketplaceCapability] = {
         requires_auth="api_key",
         max_results_per_page=100,
         rate_limit_rpm=30,
-        strengths=["cloud_scraping", "fallback", "multi_marketplace", "no_cookies_needed"],
-        notes="Cloud scraping via Apify Actors. Fallback when direct scraping fails. "
-              "Supports Vinted and Grailed actors. Requires APIFY_API_TOKEN ($29/mo plan).",
+        strengths=["cloud_scraping", "multi_marketplace", "no_cookies_needed", "8_actors"],
+        notes="Cloud scraping via Apify Actors. Supports 8 marketplace actors: "
+              "Vinted, Grailed, eBay, Vestiaire, Depop, Allegro, OLX, StockX. "
+              "Requires APIFY_API_TOKEN.",
+    ),
+    "allegro": MarketplaceCapability(
+        categories=["clothing", "shoes", "electronics", "home", "kids", "sports", "general"],
+        regions=["PL", "CZ", "SK", "HU"],
+        has_api=True,
+        requires_auth="api_key",
+        max_results_per_page=60,
+        rate_limit_rpm=30,
+        strengths=["CEE_coverage", "large_inventory", "electronics", "polish_market"],
+        notes="Largest e-commerce in Poland/CEE. Via Apify Actor. "
+              "Supports allegro.pl, allegro.cz, allegro.sk.",
+    ),
+    "olx": MarketplaceCapability(
+        categories=["electronics", "furniture", "clothing", "home", "sports", "general"],
+        regions=["PL", "UA", "RO", "PT", "BG"],
+        has_api=False,
+        requires_auth="api_key",
+        max_results_per_page=50,
+        rate_limit_rpm=30,
+        strengths=["classifieds", "local_deals", "CEE_coverage", "diverse_categories"],
+        notes="Classifieds marketplace. No search API — via Apify Actor. "
+              "Multi-country: Poland, Ukraine, Romania, Portugal, Bulgaria.",
+    ),
+    "stockx": MarketplaceCapability(
+        categories=["shoes", "streetwear", "accessories", "electronics"],
+        regions=["US", "EU", "UK"],
+        has_api=True,
+        requires_auth="api_key",
+        max_results_per_page=50,
+        rate_limit_rpm=30,
+        strengths=["sneakers", "authenticated", "market_data", "bid_ask"],
+        notes="Stock exchange for sneakers and collectibles. Bid/Ask system. "
+              "Physical authentication. Via Apify Actor.",
     ),
 }
 
@@ -105,19 +140,19 @@ MARKETPLACE_REGISTRY: dict[str, MarketplaceCapability] = {
 CATEGORY_ROUTING: dict[str, list[tuple[str, str]]] = {
     # category: [(marketplace, region), ...]
     # "apify" is listed as last fallback — cloud scraping when direct fails
-    "clothing":     [("vinted", "EU"), ("grailed", "US"), ("depop", "US"), ("ebay", "US"), ("apify", "EU")],
-    "shoes":        [("vinted", "EU"), ("grailed", "US"), ("ebay", "US"), ("depop", "US"), ("apify", "EU")],
+    "clothing":     [("vinted", "EU"), ("grailed", "US"), ("depop", "US"), ("allegro", "PL"), ("ebay", "US"), ("apify", "EU")],
+    "shoes":        [("vinted", "EU"), ("stockx", "US"), ("grailed", "US"), ("ebay", "US"), ("depop", "US"), ("apify", "EU")],
     "accessories":  [("vinted", "EU"), ("vestiaire", "EU"), ("grailed", "US"), ("ebay", "US"), ("apify", "EU")],
     "bags":         [("vestiaire", "EU"), ("vinted", "EU"), ("ebay", "US"), ("grailed", "US"), ("apify", "EU")],
     "luxury":       [("vestiaire", "EU"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "EU")],
-    "streetwear":   [("grailed", "US"), ("depop", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "US")],
+    "streetwear":   [("grailed", "US"), ("depop", "US"), ("stockx", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "US")],
     "vintage":      [("depop", "US"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "EU")],
-    "electronics":  [("ebay", "US"), ("vinted", "EU")],
-    "furniture":    [("vinted", "EU"), ("ebay", "US")],
-    "sports":       [("ebay", "US"), ("vinted", "EU"), ("depop", "US")],
-    "kids":         [("vinted", "EU"), ("ebay", "US"), ("depop", "US")],
-    "home":         [("vinted", "EU"), ("ebay", "US")],
-    "general":      [("vinted", "EU"), ("ebay", "US"), ("depop", "US"), ("grailed", "US"), ("apify", "EU")],
+    "electronics":  [("ebay", "US"), ("allegro", "PL"), ("olx", "PL"), ("vinted", "EU")],
+    "furniture":    [("olx", "PL"), ("vinted", "EU"), ("allegro", "PL"), ("ebay", "US")],
+    "sports":       [("ebay", "US"), ("allegro", "PL"), ("vinted", "EU"), ("depop", "US")],
+    "kids":         [("vinted", "EU"), ("allegro", "PL"), ("ebay", "US"), ("depop", "US")],
+    "home":         [("olx", "PL"), ("allegro", "PL"), ("vinted", "EU"), ("ebay", "US")],
+    "general":      [("vinted", "EU"), ("ebay", "US"), ("allegro", "PL"), ("olx", "PL"), ("depop", "US"), ("grailed", "US"), ("apify", "EU")],
 }
 
 
@@ -1273,15 +1308,18 @@ class ApifyProvider(BaseMarketplaceProvider):
     api_key_env = "APIFY_API_TOKEN"
     min_request_interval = 1.0  # Apify handles rate limiting
 
-    # Map marketplace → Apify Actor ID + input builder
+    # Map marketplace → Apify Actor ID
     # Format: "username/actor-name"
+    # Selected based on: user count, rating, output richness, cost efficiency
     ACTOR_MAP: dict[str, str] = {
-        "vinted": "bebity/vinted-premium-actor",
-        "grailed": "benthepythondev/grailed-scraper",
-        # Add more actors as discovered:
-        # "ebay": "actor-id/ebay-scraper",
-        # "vestiaire": "actor-id/vestiaire-scraper",
-        # "depop": "actor-id/depop-scraper",
+        "vinted": "bebity/vinted-premium-actor",           # 451 users, parameter-based
+        "grailed": "vmscrapers/grailed",                   # 43 users, rich output (price_drops, seller_score)
+        "ebay": "dtrungtin/ebay-items-scraper",            # 1700 users, 5.0★, 18 countries
+        "vestiaire": "parseforge/vestiairecollective-scraper",  # 5.0★, luxury items
+        "depop": "consummate_mandala/depop-listing-scraper",    # $0.75/1K, budget-friendly
+        "allegro": "tri_angle/allegro-fast-product-scraper",    # 376 users, PL/CZ/SK
+        "olx": "ecomscrape/olx-product-search-scraper",        # 5.0★, multi-country classifieds
+        "stockx": "ecomscrape/stockx-product-search-scraper",  # 85 users, sneakers/collectibles
     }
 
     # Max wait time for Actor run (seconds)
@@ -1321,15 +1359,97 @@ class ApifyProvider(BaseMarketplaceProvider):
             return inp
 
         elif marketplace == "grailed":
-            inp = {
-                "searchQuery": params.query,
+            # vmscrapers/grailed uses URL-based input (search/category/collection pages)
+            import urllib.parse
+            query_encoded = urllib.parse.quote_plus(
+                f"{params.brand} {params.query}".strip() if params.brand else params.query
+            )
+            search_url = f"https://www.grailed.com/shop?query={query_encoded}"
+            return {
+                "startUrls": [{"url": search_url}],
+            }
+
+        elif marketplace == "ebay":
+            # dtrungtin/ebay-items-scraper uses URL-based input (search pages)
+            import urllib.parse
+            query_parts = [params.brand, params.query] if params.brand else [params.query]
+            query_encoded = urllib.parse.quote_plus(" ".join(p for p in query_parts if p))
+            domain_map = {
+                "US": "com", "UK": "co.uk", "DE": "de", "FR": "fr",
+                "IT": "it", "ES": "es", "AU": "com.au",
+            }
+            region = params.region.upper() if params.region else "US"
+            domain = domain_map.get(region, "com")
+            search_url = f"https://www.ebay.{domain}/sch/i.html?_nkw={query_encoded}"
+            if params.min_price > 0:
+                search_url += f"&_udlo={int(params.min_price)}"
+            if params.max_price > 0:
+                search_url += f"&_udhi={int(params.max_price)}"
+            return {
+                "startUrls": [{"url": search_url}],
+                "maxItems": params.limit,
+            }
+
+        elif marketplace == "vestiaire":
+            # parseforge/vestiairecollective-scraper uses URL-based input
+            import urllib.parse
+            query_parts = [params.brand, params.query] if params.brand else [params.query]
+            query_encoded = urllib.parse.quote_plus(" ".join(p for p in query_parts if p))
+            search_url = f"https://www.vestiairecollective.com/search/?q={query_encoded}"
+            return {
+                "startUrls": [search_url],
+                "maxItems": params.limit,
+            }
+
+        elif marketplace == "depop":
+            # consummate_mandala/depop-listing-scraper uses parameter-based input
+            search_query = f"{params.brand} {params.query}".strip() if params.brand else params.query
+            return {
+                "searchQueries": [search_query],
+                "maxResults": params.limit,
+            }
+
+        elif marketplace == "allegro":
+            # tri_angle/allegro-fast-product-scraper — param-based, PL/CZ/SK
+            search_query = f"{params.brand} {params.query}".strip() if params.brand else params.query
+            domain = "allegro.pl"  # Default to Polish Allegro
+            if params.region:
+                domain_map = {"PL": "allegro.pl", "CZ": "allegro.cz", "SK": "allegro.sk"}
+                domain = domain_map.get(params.region.upper(), "allegro.pl")
+            return {
+                "search": search_query,
+                "searchDomain": domain,
+                "maxProducts": params.limit,
+            }
+
+        elif marketplace == "olx":
+            # ecomscrape/olx-product-search-scraper — URL-based, multi-country
+            import urllib.parse
+            query_slug = params.query.replace(" ", "-")
+            domain_map = {
+                "PL": "olx.pl", "UA": "olx.ua", "RO": "olx.ro",
+                "PT": "olx.pt", "BG": "olx.bg",
+            }
+            region = params.region.upper() if params.region else "PL"
+            domain = domain_map.get(region, "olx.pl")
+            search_url = f"https://www.{domain}/oferty/q-{urllib.parse.quote(query_slug)}/"
+            inp: dict = {
+                "startUrls": [search_url],
                 "maxItems": params.limit,
             }
             if params.min_price > 0:
-                inp["minPrice"] = params.min_price
+                inp["priceMin"] = int(params.min_price)
             if params.max_price > 0:
-                inp["maxPrice"] = params.max_price
+                inp["priceMax"] = int(params.max_price)
             return inp
+
+        elif marketplace == "stockx":
+            # ecomscrape/stockx-product-search-scraper — param-based
+            search_query = f"{params.brand} {params.query}".strip() if params.brand else params.query
+            return {
+                "keyword": search_query,
+                "maxItems": params.limit,
+            }
 
         else:
             # Generic fallback — most actors accept "search" + "maxItems"
@@ -1375,6 +1495,201 @@ class ApifyProvider(BaseMarketplaceProvider):
             else str(item.get("seller", "")),
         )
 
+    def _parse_ebay_result(self, item: dict) -> MarketplaceItem:
+        """Parse dtrungtin/ebay-items-scraper output."""
+        try:
+            price = float(item.get("price", 0))
+        except (ValueError, TypeError):
+            price = 0.0
+        return MarketplaceItem(
+            item_id=str(item.get("itemNumber", item.get("id", ""))),
+            marketplace="ebay",
+            title=item.get("title", ""),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "USD"),
+            brand=item.get("brand", ""),
+            condition=item.get("condition", item.get("type", "")),
+            image_url=item.get("image", item.get("thumbnailUrl", "")),
+            seller_name=item.get("seller", ""),
+            location=item.get("itemLocation", ""),
+        )
+
+    def _parse_vestiaire_result(self, item: dict) -> MarketplaceItem:
+        """Parse parseforge/vestiairecollective-scraper output."""
+        try:
+            price_raw = item.get("price", item.get("salePrice", 0))
+            if isinstance(price_raw, dict):
+                price = float(price_raw.get("amount", price_raw.get("value", 0)))
+            else:
+                price = float(price_raw)
+        except (ValueError, TypeError):
+            price = 0.0
+        brand_raw = item.get("brand", item.get("designer", ""))
+        if isinstance(brand_raw, dict):
+            brand_raw = brand_raw.get("name", "")
+        images = item.get("pictures", item.get("images", []))
+        image_url = ""
+        if images:
+            if isinstance(images[0], dict):
+                image_url = images[0].get("url", images[0].get("path", ""))
+            else:
+                image_url = str(images[0])
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("productId", ""))),
+            marketplace="vestiaire",
+            title=item.get("name", item.get("title", "")),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "EUR"),
+            brand=str(brand_raw),
+            condition=item.get("condition", ""),
+            image_url=image_url,
+            seller_name=item.get("seller", {}).get("username", "")
+            if isinstance(item.get("seller"), dict) else "",
+            location=item.get("seller", {}).get("country", "")
+            if isinstance(item.get("seller"), dict) else "",
+        )
+
+    def _parse_depop_result(self, item: dict) -> MarketplaceItem:
+        """Parse consummate_mandala/depop-listing-scraper output."""
+        try:
+            price_raw = item.get("price", 0)
+            if isinstance(price_raw, dict):
+                price = float(price_raw.get("amount", price_raw.get("value", 0)))
+            else:
+                price = float(price_raw)
+        except (ValueError, TypeError):
+            price = 0.0
+        images = item.get("images", item.get("pictures", []))
+        image_url = ""
+        if images:
+            if isinstance(images[0], dict):
+                image_url = images[0].get("url", images[0].get("path", ""))
+            else:
+                image_url = str(images[0])
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("slug", ""))),
+            marketplace="depop",
+            title=item.get("description", item.get("title", ""))[:100],
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "USD"),
+            brand=item.get("brand", ""),
+            size=item.get("size", ""),
+            condition=item.get("condition", ""),
+            image_url=image_url,
+            seller_name=item.get("seller", {}).get("username", "")
+            if isinstance(item.get("seller"), dict) else "",
+            favorites=item.get("likes", 0),
+        )
+
+    def _parse_allegro_result(self, item: dict) -> MarketplaceItem:
+        """Parse tri_angle/allegro-fast-product-scraper output."""
+        try:
+            price_raw = item.get("price", item.get("sellingMode", {}).get("price", {}))
+            if isinstance(price_raw, dict):
+                price = float(price_raw.get("amount", price_raw.get("value", 0)))
+            else:
+                price = float(price_raw)
+        except (ValueError, TypeError):
+            price = 0.0
+        currency = "PLN"
+        if isinstance(item.get("price", None), dict):
+            currency = item["price"].get("currency", "PLN")
+        images = item.get("images", item.get("photos", []))
+        image_url = ""
+        if images:
+            if isinstance(images[0], dict):
+                image_url = images[0].get("url", images[0].get("original", ""))
+            else:
+                image_url = str(images[0])
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("itemId", ""))),
+            marketplace="allegro",
+            title=item.get("name", item.get("title", "")),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=currency,
+            brand=item.get("brand", ""),
+            condition=item.get("condition", ""),
+            image_url=image_url,
+            location=item.get("location", item.get("city", "")),
+            seller_name=item.get("seller", {}).get("login", "")
+            if isinstance(item.get("seller"), dict)
+            else str(item.get("seller", "")),
+        )
+
+    def _parse_olx_result(self, item: dict) -> MarketplaceItem:
+        """Parse ecomscrape/olx-product-search-scraper output."""
+        try:
+            price_raw = item.get("price", 0)
+            if isinstance(price_raw, dict):
+                price = float(price_raw.get("amount", price_raw.get("value", 0)))
+            elif isinstance(price_raw, str):
+                import re
+                numbers = re.findall(r'[\d.,]+', price_raw.replace(",", "."))
+                price = float(numbers[0]) if numbers else 0.0
+            else:
+                price = float(price_raw)
+        except (ValueError, TypeError):
+            price = 0.0
+        images = item.get("images", item.get("photos", []))
+        image_url = ""
+        if images:
+            if isinstance(images[0], dict):
+                image_url = images[0].get("url", images[0].get("link", ""))
+            else:
+                image_url = str(images[0])
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("adId", ""))),
+            marketplace="olx",
+            title=item.get("name", item.get("title", "")),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "PLN"),
+            image_url=image_url,
+            location=item.get("location", item.get("city", "")),
+            seller_name=item.get("seller", {}).get("name", "")
+            if isinstance(item.get("seller"), dict) else "",
+        )
+
+    def _parse_stockx_result(self, item: dict) -> MarketplaceItem:
+        """Parse ecomscrape/stockx-product-search-scraper output."""
+        try:
+            # StockX has complex pricing — try multiple paths
+            price_raw = (
+                item.get("retailPrice")
+                or item.get("lastSale")
+                or item.get("price")
+                or item.get("market", {}).get("lastSale", 0)
+            )
+            if isinstance(price_raw, dict):
+                price = float(price_raw.get("amount", 0))
+            else:
+                price = float(price_raw)
+        except (ValueError, TypeError):
+            price = 0.0
+        images = item.get("images", item.get("media", {}).get("imageUrl", ""))
+        if isinstance(images, list):
+            image_url = str(images[0]) if images else ""
+        elif isinstance(images, str):
+            image_url = images
+        else:
+            image_url = ""
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("urlKey", item.get("styleId", "")))),
+            marketplace="stockx",
+            title=item.get("name", item.get("title", "")),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "USD"),
+            brand=item.get("brand", ""),
+            condition=item.get("condition", "New"),
+            image_url=image_url,
+            category=item.get("category", item.get("productCategory", "")),
+        )
+
     def _parse_generic_result(
         self, item: dict, marketplace: str
     ) -> MarketplaceItem:
@@ -1404,6 +1719,12 @@ class ApifyProvider(BaseMarketplaceProvider):
         parsers = {
             "vinted": self._parse_vinted_result,
             "grailed": self._parse_grailed_result,
+            "ebay": self._parse_ebay_result,
+            "vestiaire": self._parse_vestiaire_result,
+            "depop": self._parse_depop_result,
+            "allegro": self._parse_allegro_result,
+            "olx": self._parse_olx_result,
+            "stockx": self._parse_stockx_result,
         }
         parser = parsers.get(marketplace, lambda i: self._parse_generic_result(i, marketplace))
         try:
@@ -1572,4 +1893,4 @@ def get_best_marketplace_for_category(category: str) -> tuple[str, str] | None:
     return None
 
 
-VALID_MARKETPLACES = ["vinted", "ebay", "grailed", "vestiaire", "depop", "apify"]
+VALID_MARKETPLACES = ["vinted", "ebay", "grailed", "vestiaire", "depop", "apify", "allegro", "olx", "stockx"]

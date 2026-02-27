@@ -97,8 +97,8 @@ class TestFormatItems:
 # =============================================================================
 
 class TestToolRegistration:
-    def test_register_tools_creates_13_tools(self):
-        """Verify all 13 tools are registered."""
+    def test_register_tools_creates_16_tools(self):
+        """Verify all 16 tools are registered."""
         mcp = FastMCP("test-server")
         register_tools(mcp)
 
