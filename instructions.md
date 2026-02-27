@@ -10,16 +10,42 @@ MCP сервер для поиска товаров на 5 маркетплей�
 mcp-marketplace-search/
 ├── server/
 │   ├── __init__.py          # Package init
-│   ├── main.py              # FastMCP entry point (66 lines)
-│   ├── types.py             # Shared types: SearchParams, MarketplaceItem, SearchResult
-│   ├── providers.py         # BaseMarketplaceProvider + 5 implementations
-│   ├── tools.py             # 12 MCP tools registration
-│   └── db.py                # SQLite persistence (search history)
+│   ├── __main__.py          # python -m server entrypoint
+│   ├── main.py              # FastMCP entry point (78 lines)
+│   ├── types.py             # Shared types: SearchParams, MarketplaceItem, SearchResult (~199 lines)
+│   ├── providers.py         # BaseMarketplaceProvider + 5 implementations (~1296 lines)
+│   ├── tools.py             # 12 MCP tools registration (~674 lines)
+│   └── db.py                # Thread-safe SQLite persistence (~310 lines)
+├── tests/
+│   ├── conftest.py          # Fixtures: temp_db, reset_providers, sample_items
+│   ├── test_types.py        # 20 tests — enums, dataclasses, defaults
+│   ├── test_db.py           # 19 tests — CRUD, thread safety, singleton
+│   ├── test_providers.py    # 33 tests — health, registry, routing, per-provider
+│   └── test_tools.py        # 9 tests — formatting, registration, search logic
 ├── data/                    # SQLite DB (auto-created)
-├── pyproject.toml           # Dependencies: mcp[cli], httpx
+├── pyproject.toml           # Dependencies + test config
+├── .gitignore               # Excludes __pycache__, data/*.db, .venv, uv.lock
 ├── .mcp.json                # Claude Code MCP config
 └── instructions.md          # This file
 ```
+
+## Tests
+
+```bash
+# Run all 108 tests
+uv run --with pytest --with pytest-cov pytest tests/ -v
+
+# With coverage
+uv run --with pytest --with pytest-cov pytest tests/ -v --cov=server --cov-report=term-missing
+```
+
+| File | Tests | Coverage |
+|:-----|------:|:---------|
+| test_types.py | 20 | Enums, dataclasses, defaults, mutable safety |
+| test_db.py | 19 | CRUD, history, stats, cleanup, threads, singleton |
+| test_providers.py | 33 | Health, registry, routing, instantiation, behavior |
+| test_tools.py | 9 | Formatting, registration, search mocking |
+| **Total** | **108** | **All passing** |
 
 ## Marketplaces
 
@@ -101,8 +127,55 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - This MCP server = multi-marketplace, pluggable, Claude Code integrated
 - Future: VintedFlip can consume this server's search results
 
+## Roadmap
+
+### v1.0 — Core (DONE ✅)
+- [x] 5 marketplace providers (Vinted, eBay, Grailed, Vestiaire, Depop)
+- [x] 12 MCP tools (search, orchestrator, item, utility)
+- [x] Circuit breaker + health tracking
+- [x] Category routing (13 categories)
+- [x] Thread-safe SQLite persistence
+- [x] 108 tests, all passing
+- [x] Private GitHub repo
+
+### v1.1 — Real API Validation
+- [ ] Test Vinted search with real cookies (Playwright auto-cookie)
+- [ ] Test eBay with real API key (OAuth flow)
+- [ ] Test Grailed with real Algolia key
+- [ ] Test Vestiaire + Depop with real cookies
+- [ ] Fix any API response parsing issues found
+- [ ] Integration tests with real endpoints
+
+### v1.2 — New Marketplaces
+- [ ] Apify integration as fallback provider (user has $29/mo plan)
+- [ ] Mercari (US resale)
+- [ ] Poshmark (US fashion)
+- [ ] Wallapop (Spain/EU)
+- [ ] Template: `docs/adding-marketplace.md` with step-by-step
+
+### v1.3 — Deploy & Production
+- [ ] Docker container + compose
+- [ ] Deploy to user's server (root access available)
+- [ ] Health monitoring endpoint
+- [ ] Data retention / cleanup job
+- [ ] Structured logging (JSON)
+
+### v2.0 — Intelligence
+- [ ] Price trend analysis (historical data from SQLite)
+- [ ] Deal scoring (cross-marketplace price comparison)
+- [ ] Notification system (price drops, new listings)
+- [ ] AI-powered item categorization
+- [ ] Photo-based search (Claude Vision integration)
+
+## Git
+
+- **Repo:** `pavelraiden/mcp-marketplace-search` (private)
+- **Branch:** `master`
+- **Initial commit:** `2e4483a` — v1.0.0 (16 files, 4017 lines)
+
 ## Created
 
 - **Date:** 2026-02-27
 - **Based on:** mcp-multi-ai architecture pattern
 - **Session:** VintedFlip session 9 (deep self-learning + MCP marketplace server)
+- **Deep audit:** Session 10 (108 tests, bug fixes, git init)
