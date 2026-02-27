@@ -1,0 +1,673 @@
+"""MCP tools for marketplace search.
+
+12 tools total:
+- 5 search_* tools (one per marketplace)
+- 3 orchestrator tools (search_all, search_smart, marketplace_health)
+- 2 item tools (get_item, compare_prices)
+- 2 utility tools (search_history, list_marketplaces)
+"""
+
+import time
+import logging
+import concurrent.futures
+from mcp.server.fastmcp import FastMCP
+
+from server.db import get_db
+from server.types import SearchParams
+from server.providers import (
+    get_provider, get_providers, get_available_providers,
+    get_best_marketplace_for_category, get_health, get_all_health,
+    VALID_MARKETPLACES, CATEGORY_ROUTING, MARKETPLACE_REGISTRY,
+)
+
+logger = logging.getLogger("marketplace.tools")
+
+MAX_OUTPUT_CHARS = 24000
+
+
+def _format_items(items, max_items: int = 20) -> str:
+    """Format marketplace items as a readable table."""
+    if not items:
+        return "No items found."
+
+    lines = [
+        "| # | Title | Price | Brand | Size | Marketplace | Link |",
+        "|--:|:------|------:|:------|:-----|:------------|:-----|",
+    ]
+
+    for i, item in enumerate(items[:max_items], 1):
+        title = item.title[:50] + ("..." if len(item.title) > 50 else "")
+        price_str = f"{item.price:.0f} {item.currency}"
+        brand = item.brand[:20] if item.brand else "-"
+        size = item.size[:10] if item.size else "-"
+        link = f"[View]({item.url})" if item.url else "-"
+        lines.append(
+            f"| {i} | {title} | {price_str} | {brand} | {size} | "
+            f"{item.marketplace} | {link} |"
+        )
+
+    if len(items) > max_items:
+        lines.append(f"\n*...and {len(items) - max_items} more items*")
+
+    return "\n".join(lines)
+
+
+def _search_marketplace(
+    marketplace_name: str,
+    query: str,
+    brand: str = "",
+    min_price: float = 0,
+    max_price: float = 0,
+    condition: str = "",
+    size: str = "",
+    sort: str = "relevance",
+    limit: int = 20,
+    region: str = "",
+) -> str:
+    """Core search logic shared by all search_* tools."""
+    db = get_db()
+    provider = get_provider(marketplace_name)
+
+    if not provider.is_available():
+        return (
+            f"ERROR: {marketplace_name} is not configured.\n"
+            f"Set {provider.api_key_env} environment variable."
+        )
+
+    params = SearchParams(
+        query=query,
+        brand=brand,
+        min_price=min_price,
+        max_price=max_price,
+        condition=condition,
+        size=size,
+        sort=sort,
+        limit=limit,
+        region=region,
+    )
+
+    try:
+        result = provider.search(params)
+    except Exception as e:
+        error_msg = f"ERROR searching {marketplace_name}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
+
+    # Save to DB
+    search_id = db.save_search(
+        query=query,
+        marketplace=marketplace_name,
+        brand=brand or None,
+        min_price=min_price if min_price > 0 else None,
+        max_price=max_price if max_price > 0 else None,
+        condition=condition or None,
+        region=region or None,
+        total_results=result.total_found,
+        items_returned=len(result.items),
+        duration_ms=result.duration_ms,
+    )
+    if result.items:
+        db.save_search_items(search_id, [item.to_dict() for item in result.items])
+
+    # Format output
+    output = f"## {provider.display_name} Search Results\n\n"
+    output += f"**Query:** {query}"
+    if brand:
+        output += f" | **Brand:** {brand}"
+    if min_price > 0 or max_price > 0:
+        output += f" | **Price:** {min_price or '?'}-{max_price or '?'}"
+    output += f"\n**Found:** {result.total_found} items | "
+    output += f"**Showing:** {len(result.items)} | "
+    output += f"**Time:** {result.duration_ms}ms\n"
+    output += f"**Search ID:** `{search_id}`\n\n"
+
+    output += _format_items(result.items, max_items=limit)
+
+    if len(output) > MAX_OUTPUT_CHARS:
+        output = output[:MAX_OUTPUT_CHARS]
+        output += "\n\n[TRUNCATED]"
+
+    return output
+
+
+# =============================================================================
+# TOOL REGISTRATION
+# =============================================================================
+
+def register_tools(mcp: FastMCP):
+    """Register all 12 tools with the MCP server."""
+
+    # =========================================================================
+    # 5 MARKETPLACE SEARCH TOOLS
+    # =========================================================================
+
+    @mcp.tool()
+    def search_vinted(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        condition: str = "",
+        size: str = "",
+        sort: str = "relevance",
+        limit: int = 20,
+        region: str = "EU",
+    ) -> str:
+        """Search Vinted marketplace for secondhand items.
+        Largest EU secondhand platform. Fashion, shoes, accessories, home, electronics.
+        Conditions: new_with_tags, new_without_tags, very_good, good, fair.
+        Sort: relevance, price_asc, price_desc, newest.
+        Region: EU (default), or specific domain: fr, de, it, es, nl, be, uk, pl."""
+        return _search_marketplace(
+            "vinted", query, brand, min_price, max_price,
+            condition, size, sort, limit, region,
+        )
+
+    @mcp.tool()
+    def search_ebay(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        condition: str = "",
+        sort: str = "relevance",
+        limit: int = 20,
+        region: str = "US",
+    ) -> str:
+        """Search eBay marketplace. Global marketplace for everything.
+        Official API with sold item data. Great for electronics, collectibles, general items.
+        Conditions: new_with_tags, like_new, very_good, good, fair.
+        Sort: relevance, price_asc, price_desc, newest.
+        Region: US, UK, DE, FR, IT, ES, AU."""
+        return _search_marketplace(
+            "ebay", query, brand, min_price, max_price,
+            condition, "", sort, limit, region,
+        )
+
+    @mcp.tool()
+    def search_grailed(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        sort: str = "relevance",
+        limit: int = 20,
+    ) -> str:
+        """Search Grailed marketplace. Premium menswear and streetwear.
+        Designer, archive, streetwear, vintage fashion. US-focused but global shipping.
+        Best for: Supreme, Rick Owens, Comme des Garcons, archive fashion.
+        Sort: relevance, price_asc, price_desc, newest."""
+        return _search_marketplace(
+            "grailed", query, brand, min_price, max_price,
+            "", "", sort, limit, "US",
+        )
+
+    @mcp.tool()
+    def search_vestiaire(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        sort: str = "relevance",
+        limit: int = 20,
+    ) -> str:
+        """Search Vestiaire Collective. Luxury resale with authentication.
+        Pre-owned luxury bags, clothing, shoes, accessories.
+        Items are authenticated by Vestiaire team.
+        Best for: Hermes, Chanel, Louis Vuitton, Dior, Gucci."""
+        return _search_marketplace(
+            "vestiaire", query, brand, min_price, max_price,
+            "", "", sort, limit, "EU",
+        )
+
+    @mcp.tool()
+    def search_depop(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        sort: str = "relevance",
+        limit: int = 20,
+    ) -> str:
+        """Search Depop marketplace. Gen-Z vintage and streetwear.
+        Unique finds, Y2K fashion, vintage, creative sellers.
+        Mobile-first community marketplace.
+        Best for: vintage, unique pieces, Y2K, indie brands."""
+        return _search_marketplace(
+            "depop", query, brand, min_price, max_price,
+            "", "", sort, limit, "US",
+        )
+
+    # =========================================================================
+    # 3 ORCHESTRATOR TOOLS
+    # =========================================================================
+
+    @mcp.tool()
+    def search_all(
+        query: str,
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        marketplaces: str = "",
+        limit: int = 10,
+    ) -> str:
+        """Search MULTIPLE marketplaces in parallel and compare results.
+        Returns combined results from all available marketplaces.
+        Use for price comparison or finding best deals across platforms.
+
+        marketplaces: comma-separated (e.g. "vinted,ebay,grailed").
+                      Leave empty to search all available.
+        limit: items per marketplace (default 10)."""
+        all_providers = get_providers()
+        available = get_available_providers()
+
+        if not available:
+            return "ERROR: No marketplaces configured. Set at least one API key."
+
+        # Parse marketplace list
+        if marketplaces:
+            requested = [m.strip() for m in marketplaces.split(",") if m.strip()]
+            invalid = [m for m in requested if m not in VALID_MARKETPLACES]
+            if invalid:
+                return f"ERROR: Unknown marketplace(s): {', '.join(invalid)}"
+            target = [m for m in requested if m in available]
+            if not target:
+                return f"ERROR: None of requested marketplaces configured. Available: {', '.join(available)}"
+        else:
+            target = available
+
+        params = SearchParams(
+            query=query, brand=brand,
+            min_price=min_price, max_price=max_price,
+            limit=limit,
+        )
+
+        # Search all in parallel
+        TIMEOUT = 45  # seconds
+        results = {}
+        start_all = time.monotonic()
+
+        def _call_one(mname, provider):
+            try:
+                result = provider.search(params)
+                return (mname, result, None)
+            except Exception as e:
+                return (mname, None, str(e))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(target)) as executor:
+            futures = {
+                executor.submit(_call_one, m, all_providers[m]): m
+                for m in target
+            }
+            done, not_done = concurrent.futures.wait(futures.keys(), timeout=TIMEOUT)
+            for future in done:
+                mname, result, error = future.result()
+                results[mname] = {"result": result, "error": error}
+            for future in not_done:
+                future.cancel()
+                mname = futures[future]
+                results[mname] = {"result": None, "error": f"Timed out ({TIMEOUT}s)"}
+
+        total_ms = int((time.monotonic() - start_all) * 1000)
+
+        # Save to DB
+        db = get_db()
+        all_items_count = sum(
+            len(r["result"].items) for r in results.values() if r["result"]
+        )
+        search_id = db.save_search(
+            query=query, marketplace="ALL",
+            brand=brand or None,
+            min_price=min_price if min_price > 0 else None,
+            max_price=max_price if max_price > 0 else None,
+            total_results=all_items_count,
+            items_returned=all_items_count,
+            duration_ms=total_ms,
+        )
+
+        # Format output
+        output = f"# Cross-Marketplace Search ({total_ms}ms)\n\n"
+        output += f"**Query:** {query}"
+        if brand:
+            output += f" | **Brand:** {brand}"
+        output += f"\n\n"
+
+        # Summary table
+        output += "| Marketplace | Items | Total | Time | Status |\n"
+        output += "|:------------|------:|------:|-----:|:-------|\n"
+        total_items = 0
+        for mname in target:
+            r = results.get(mname, {})
+            if r.get("error"):
+                output += f"| {mname} | — | — | — | ❌ {r['error'][:40]} |\n"
+            elif r.get("result"):
+                res = r["result"]
+                total_items += len(res.items)
+                output += (
+                    f"| {mname} | {len(res.items)} | {res.total_found} | "
+                    f"{res.duration_ms}ms | ✅ |\n"
+                )
+
+        output += f"\n**Total items:** {total_items}\n\n"
+
+        # Results per marketplace
+        for mname in target:
+            r = results.get(mname, {})
+            if r.get("error") or not r.get("result"):
+                continue
+            res = r["result"]
+            if res.items:
+                output += f"---\n\n### {mname.upper()} ({len(res.items)} items)\n\n"
+                output += _format_items(res.items, max_items=limit)
+                output += "\n\n"
+
+        if len(output) > MAX_OUTPUT_CHARS:
+            output = output[:MAX_OUTPUT_CHARS]
+            output += "\n\n[TRUNCATED]"
+
+        return output
+
+    @mcp.tool()
+    def search_smart(
+        query: str,
+        category: str = "general",
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+    ) -> str:
+        """Smart-route search to the BEST marketplace for an item category.
+        Automatically selects optimal marketplace based on category routing.
+
+        Categories: clothing, shoes, accessories, bags, luxury, streetwear,
+        vintage, electronics, furniture, sports, kids, home, general.
+
+        Example: search_smart("Jordan 4", category="shoes")
+        → Routes to Vinted (EU) as first choice for shoes."""
+        valid_cats = list(CATEGORY_ROUTING.keys())
+        if category not in valid_cats:
+            return f"ERROR: Unknown category '{category}'. Available: {', '.join(valid_cats)}"
+
+        best = get_best_marketplace_for_category(category)
+        if not best:
+            return f"ERROR: No marketplaces available for '{category}'."
+
+        marketplace_name, region = best
+        route_chain = CATEGORY_ROUTING.get(category, [])
+        chain_str = " → ".join(f"{m}({r})" for m, r in route_chain)
+
+        result = _search_marketplace(
+            marketplace_name, query, brand, min_price, max_price,
+            "", "", "relevance", limit, region,
+        )
+
+        header = (
+            f"🎯 **Smart Routing** → `{category}` → **{marketplace_name}** ({region})\n"
+            f"Route chain: {chain_str}\n\n"
+        )
+        return header + result
+
+    @mcp.tool()
+    def marketplace_health() -> str:
+        """Show health status of all marketplace providers.
+        Displays: availability, success rate, avg latency, circuit breaker state.
+        Use to check which marketplaces are working."""
+        all_providers = get_providers()
+        available = get_available_providers()
+        health_data = get_all_health()
+
+        output = "# Marketplace Health Dashboard\n\n"
+        output += f"**Available:** {len(available)}/{len(all_providers)} configured\n\n"
+
+        output += "| Marketplace | Status | Calls | Success | Avg Latency | Circuit | Auth |\n"
+        output += "|:------------|:-------|------:|--------:|------------:|:--------|:-----|\n"
+
+        for name, p in all_providers.items():
+            cap = MARKETPLACE_REGISTRY.get(name)
+            auth_type = cap.requires_auth if cap else "?"
+
+            if not p.is_available():
+                output += (
+                    f"| {name} | ❌ No auth | — | — | — | — | "
+                    f"`{p.api_key_env}` ({auth_type}) |\n"
+                )
+                continue
+
+            h = health_data.get(name)
+            if not h or h.total_calls == 0:
+                output += f"| {name} | ✅ Ready | 0 | — | — | Closed | {auth_type} |\n"
+                continue
+
+            success_pct = f"{h.success_rate * 100:.0f}%"
+            circuit = "🔴 OPEN" if h.circuit_open else "🟢 Closed"
+            output += (
+                f"| {name} | ✅ Active | {h.total_calls} | {success_pct} | "
+                f"{h.avg_latency_ms}ms | {circuit} | {auth_type} |\n"
+            )
+
+        # Category routing table
+        output += "\n## Category Routing\n\n"
+        output += "| Category | Route (best → fallback) |\n"
+        output += "|:---------|:------------------------|\n"
+        for cat, chain in CATEGORY_ROUTING.items():
+            route_str = " → ".join(
+                f"**{m}**({r})" if m in available else f"~~{m}~~({r})"
+                for m, r in chain
+            )
+            output += f"| {cat} | {route_str} |\n"
+
+        # Marketplace capabilities
+        output += "\n## Marketplace Capabilities\n\n"
+        output += "| Marketplace | Categories | Regions | API | Rate Limit | Strengths |\n"
+        output += "|:------------|:-----------|:--------|:----|:-----------|:----------|\n"
+        for name, cap in MARKETPLACE_REGISTRY.items():
+            cats = ", ".join(cap.categories[:4])
+            if len(cap.categories) > 4:
+                cats += f" +{len(cap.categories) - 4}"
+            regions = ", ".join(cap.regions)
+            api = "✅ Official" if cap.has_api else "🔧 Scraping"
+            rate = f"{cap.rate_limit_rpm} rpm"
+            strengths = ", ".join(cap.strengths[:3])
+            output += f"| {name} | {cats} | {regions} | {api} | {rate} | {strengths} |\n"
+
+        return output
+
+    # =========================================================================
+    # 2 ITEM TOOLS
+    # =========================================================================
+
+    @mcp.tool()
+    def get_item_details(
+        marketplace: str,
+        item_id: str,
+    ) -> str:
+        """Get detailed information about a specific item.
+        marketplace: vinted, ebay, grailed, vestiaire, depop
+        item_id: the item's ID on that marketplace."""
+        if marketplace not in VALID_MARKETPLACES:
+            return f"ERROR: Unknown marketplace '{marketplace}'. Use: {', '.join(VALID_MARKETPLACES)}"
+
+        provider = get_provider(marketplace)
+        if not provider.is_available():
+            return f"ERROR: {marketplace} not configured."
+
+        try:
+            details = provider.get_item(item_id)
+        except Exception as e:
+            return f"ERROR fetching item: {e}"
+
+        if not details:
+            return f"Item {item_id} not found on {marketplace}."
+
+        item = details.item
+        output = f"## {item.title}\n\n"
+        output += f"**Marketplace:** {marketplace} | **ID:** {item_id}\n"
+        output += f"**Price:** {item.price} {item.currency}\n"
+        output += f"**Brand:** {item.brand or 'N/A'} | **Size:** {item.size or 'N/A'}\n"
+        output += f"**Condition:** {item.condition or 'N/A'}\n"
+        output += f"**URL:** {item.url}\n\n"
+
+        if details.description:
+            desc = details.description[:500]
+            output += f"**Description:**\n{desc}\n\n"
+
+        if item.seller_name:
+            output += f"**Seller:** {item.seller_name}"
+            if item.seller_rating:
+                output += f" (Rating: {item.seller_rating})"
+            output += "\n"
+
+        if details.all_photos:
+            output += f"\n**Photos:** {len(details.all_photos)}\n"
+            for i, photo in enumerate(details.all_photos[:5], 1):
+                output += f"  {i}. {photo}\n"
+
+        return output
+
+    @mcp.tool()
+    def compare_prices(
+        query: str,
+        brand: str = "",
+        marketplaces: str = "",
+    ) -> str:
+        """Compare prices for the same item across multiple marketplaces.
+        Returns average, min, max prices per marketplace for quick comparison.
+
+        marketplaces: comma-separated list, or empty for all available."""
+        all_providers = get_providers()
+        available = get_available_providers()
+
+        if marketplaces:
+            target = [m.strip() for m in marketplaces.split(",") if m.strip() in available]
+        else:
+            target = available
+
+        if len(target) < 2:
+            return "ERROR: Need at least 2 marketplaces to compare. " + f"Available: {', '.join(available)}"
+
+        params = SearchParams(query=query, brand=brand, limit=10)
+
+        # Search all in parallel
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(target)) as executor:
+            futures = {
+                executor.submit(lambda m=m: (m, all_providers[m].search(params))): m
+                for m in target
+            }
+            for future in concurrent.futures.as_completed(futures, timeout=30):
+                try:
+                    mname, result = future.result()
+                    results[mname] = result
+                except Exception as e:
+                    mname = futures[future]
+                    results[mname] = None
+                    logger.warning(f"Price compare failed for {mname}: {e}")
+
+        # Build comparison
+        output = f"# Price Comparison: {query}\n\n"
+        if brand:
+            output += f"**Brand:** {brand}\n\n"
+
+        output += "| Marketplace | Min | Max | Avg | Items | Currency |\n"
+        output += "|:------------|----:|----:|----:|------:|:--------:|\n"
+
+        for mname in target:
+            result = results.get(mname)
+            if not result or not result.items:
+                output += f"| {mname} | — | — | — | 0 | — |\n"
+                continue
+
+            prices = [item.price for item in result.items if item.price > 0]
+            if not prices:
+                output += f"| {mname} | — | — | — | {len(result.items)} | — |\n"
+                continue
+
+            min_p = min(prices)
+            max_p = max(prices)
+            avg_p = sum(prices) / len(prices)
+            currency = result.items[0].currency
+
+            output += (
+                f"| {mname} | {min_p:.0f} | {max_p:.0f} | {avg_p:.0f} | "
+                f"{len(prices)} | {currency} |\n"
+            )
+
+        output += "\n*Note: Prices may be in different currencies. Check marketplace for exact rates.*"
+
+        return output
+
+    # =========================================================================
+    # 2 UTILITY TOOLS
+    # =========================================================================
+
+    @mcp.tool()
+    def search_history(
+        marketplace: str = "",
+        limit: int = 20,
+    ) -> str:
+        """View recent search history.
+        Optionally filter by marketplace name.
+        Shows query, results count, and timing."""
+        db = get_db()
+        searches = db.get_search_history(
+            marketplace=marketplace or None,
+            limit=limit,
+        )
+        if not searches:
+            return "No search history found."
+
+        lines = [
+            "| # | Query | Marketplace | Results | Time | Date |",
+            "|--:|:------|:------------|--------:|-----:|:-----|",
+        ]
+        for i, s in enumerate(searches, 1):
+            query = (s["query"] or "")[:40]
+            marketplace = s["marketplace"] or "?"
+            results = s["items_returned"]
+            duration = f"{s['duration_ms']}ms"
+            date = (s["created_at"] or "")[:16]
+            lines.append(
+                f"| {i} | {query} | {marketplace} | {results} | {duration} | {date} |"
+            )
+
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def list_marketplaces() -> str:
+        """List all available marketplaces with configuration status.
+        Shows which marketplaces are configured, their capabilities, and auth requirements."""
+        providers = get_providers()
+        available = get_available_providers()
+
+        output = "# Available Marketplaces\n\n"
+        output += f"**Configured:** {len(available)}/{len(providers)}\n\n"
+
+        for name, p in providers.items():
+            status = "✅" if p.is_available() else "❌"
+            cap = MARKETPLACE_REGISTRY.get(name)
+
+            output += f"### {status} {p.display_name} (`{name}`)\n"
+            output += f"- **Auth:** `{p.api_key_env}` "
+            output += f"({'set ✅' if p.is_available() else 'NOT SET ❌'})\n"
+
+            if cap:
+                output += f"- **Categories:** {', '.join(cap.categories)}\n"
+                output += f"- **Regions:** {', '.join(cap.regions)}\n"
+                output += f"- **API:** {'Official' if cap.has_api else 'Scraping'}\n"
+                output += f"- **Rate limit:** {cap.rate_limit_rpm} requests/min\n"
+                output += f"- **Strengths:** {', '.join(cap.strengths)}\n"
+                if cap.notes:
+                    output += f"- **Notes:** {cap.notes}\n"
+            output += "\n"
+
+        # Setup instructions
+        output += "## Setup\n\n"
+        output += "Add API keys as environment variables:\n"
+        output += "```\n"
+        for name, p in providers.items():
+            cap = MARKETPLACE_REGISTRY.get(name)
+            auth = cap.requires_auth if cap else "?"
+            output += f"{p.api_key_env}=<your_{auth}>  # {p.display_name}\n"
+        output += "```\n"
+
+        return output

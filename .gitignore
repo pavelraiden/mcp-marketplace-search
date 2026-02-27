@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data (local DB)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# UV
+uv.lock
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MCP config (has API keys)
+.mcp.json
