@@ -84,6 +84,17 @@ MARKETPLACE_REGISTRY: dict[str, MarketplaceCapability] = {
         strengths=["vintage", "gen_z", "unique", "creative"],
         notes="No official API. Mobile-first marketplace.",
     ),
+    "apify": MarketplaceCapability(
+        categories=["clothing", "shoes", "accessories", "bags", "streetwear", "luxury", "vintage", "general"],
+        regions=["EU", "US"],
+        has_api=True,
+        requires_auth="api_key",
+        max_results_per_page=100,
+        rate_limit_rpm=30,
+        strengths=["cloud_scraping", "fallback", "multi_marketplace", "no_cookies_needed"],
+        notes="Cloud scraping via Apify Actors. Fallback when direct scraping fails. "
+              "Supports Vinted and Grailed actors. Requires APIFY_API_TOKEN ($29/mo plan).",
+    ),
 }
 
 
@@ -93,19 +104,20 @@ MARKETPLACE_REGISTRY: dict[str, MarketplaceCapability] = {
 
 CATEGORY_ROUTING: dict[str, list[tuple[str, str]]] = {
     # category: [(marketplace, region), ...]
-    "clothing":     [("vinted", "EU"), ("grailed", "US"), ("depop", "US"), ("ebay", "US")],
-    "shoes":        [("vinted", "EU"), ("grailed", "US"), ("ebay", "US"), ("depop", "US")],
-    "accessories":  [("vinted", "EU"), ("vestiaire", "EU"), ("grailed", "US"), ("ebay", "US")],
-    "bags":         [("vestiaire", "EU"), ("vinted", "EU"), ("ebay", "US"), ("grailed", "US")],
-    "luxury":       [("vestiaire", "EU"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US")],
-    "streetwear":   [("grailed", "US"), ("depop", "US"), ("vinted", "EU"), ("ebay", "US")],
-    "vintage":      [("depop", "US"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US")],
+    # "apify" is listed as last fallback — cloud scraping when direct fails
+    "clothing":     [("vinted", "EU"), ("grailed", "US"), ("depop", "US"), ("ebay", "US"), ("apify", "EU")],
+    "shoes":        [("vinted", "EU"), ("grailed", "US"), ("ebay", "US"), ("depop", "US"), ("apify", "EU")],
+    "accessories":  [("vinted", "EU"), ("vestiaire", "EU"), ("grailed", "US"), ("ebay", "US"), ("apify", "EU")],
+    "bags":         [("vestiaire", "EU"), ("vinted", "EU"), ("ebay", "US"), ("grailed", "US"), ("apify", "EU")],
+    "luxury":       [("vestiaire", "EU"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "EU")],
+    "streetwear":   [("grailed", "US"), ("depop", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "US")],
+    "vintage":      [("depop", "US"), ("grailed", "US"), ("vinted", "EU"), ("ebay", "US"), ("apify", "EU")],
     "electronics":  [("ebay", "US"), ("vinted", "EU")],
     "furniture":    [("vinted", "EU"), ("ebay", "US")],
     "sports":       [("ebay", "US"), ("vinted", "EU"), ("depop", "US")],
     "kids":         [("vinted", "EU"), ("ebay", "US"), ("depop", "US")],
     "home":         [("vinted", "EU"), ("ebay", "US")],
-    "general":      [("vinted", "EU"), ("ebay", "US"), ("depop", "US"), ("grailed", "US")],
+    "general":      [("vinted", "EU"), ("ebay", "US"), ("depop", "US"), ("grailed", "US"), ("apify", "EU")],
 }
 
 
@@ -1243,6 +1255,269 @@ class DepopProvider(BaseMarketplaceProvider):
 
 
 # =============================================================================
+# APIFY PROVIDER (meta-provider — uses Apify Actors for any marketplace)
+# =============================================================================
+
+class ApifyProvider(BaseMarketplaceProvider):
+    """Meta-provider that uses Apify Actors to scrape marketplaces.
+
+    Instead of directly scraping, delegates to Apify cloud scrapers.
+    Supports multiple marketplaces via configurable Actor mapping.
+    Requires APIFY_API_TOKEN env var.
+    Pricing: depends on Apify plan ($29/mo = ~30 Actor runs/day typical).
+    """
+
+    name = "apify"
+    display_name = "Apify (Cloud Scraping)"
+    base_url = "https://api.apify.com/v2"
+    api_key_env = "APIFY_API_TOKEN"
+    min_request_interval = 1.0  # Apify handles rate limiting
+
+    # Map marketplace → Apify Actor ID + input builder
+    # Format: "username/actor-name"
+    ACTOR_MAP: dict[str, str] = {
+        "vinted": "bebity/vinted-premium-actor",
+        "grailed": "benthepythondev/grailed-scraper",
+        # Add more actors as discovered:
+        # "ebay": "actor-id/ebay-scraper",
+        # "vestiaire": "actor-id/vestiaire-scraper",
+        # "depop": "actor-id/depop-scraper",
+    }
+
+    # Max wait time for Actor run (seconds)
+    ACTOR_TIMEOUT = 120
+    POLL_INTERVAL = 3
+
+    def __init__(self):
+        super().__init__()
+        self._token = self._api_key
+
+    def is_available(self) -> bool:
+        """Available if APIFY_API_TOKEN is set."""
+        return bool(self._token)
+
+    def get_supported_marketplaces(self) -> list[str]:
+        """Return list of marketplaces this provider can scrape via Apify."""
+        return list(self.ACTOR_MAP.keys())
+
+    def _build_actor_input(
+        self, marketplace: str, params: SearchParams
+    ) -> dict:
+        """Build Actor-specific input from SearchParams."""
+        if marketplace == "vinted":
+            inp: dict = {
+                "search": params.query,
+                "maxItems": params.limit,
+            }
+            if params.min_price > 0:
+                inp["priceFrom"] = params.min_price
+            if params.max_price > 0:
+                inp["priceTo"] = params.max_price
+            if params.brand:
+                inp["brand"] = params.brand
+            # Vinted actor uses domain to set country
+            domain = os.environ.get("VINTED_DOMAIN", "fr")
+            inp["url"] = f"https://www.vinted.{domain}/catalog"
+            return inp
+
+        elif marketplace == "grailed":
+            inp = {
+                "searchQuery": params.query,
+                "maxItems": params.limit,
+            }
+            if params.min_price > 0:
+                inp["minPrice"] = params.min_price
+            if params.max_price > 0:
+                inp["maxPrice"] = params.max_price
+            return inp
+
+        else:
+            # Generic fallback — most actors accept "search" + "maxItems"
+            return {
+                "search": params.query,
+                "maxItems": params.limit,
+            }
+
+    def _parse_vinted_result(self, item: dict) -> MarketplaceItem:
+        """Parse Apify Vinted actor output into MarketplaceItem."""
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("item_id", ""))),
+            marketplace="vinted",
+            title=item.get("title", ""),
+            url=item.get("url", item.get("path", "")),
+            price=float(item.get("price", item.get("total_item_price", 0))),
+            currency=item.get("currency", "EUR"),
+            brand=item.get("brand_title", item.get("brand", "")),
+            size=item.get("size_title", item.get("size", "")),
+            image_url=item.get("photo", item.get("image_url", "")),
+            condition=item.get("status", ""),
+            location=item.get("city", ""),
+            seller_name=item.get("user", {}).get("login", "")
+            if isinstance(item.get("user"), dict)
+            else str(item.get("user", "")),
+        )
+
+    def _parse_grailed_result(self, item: dict) -> MarketplaceItem:
+        """Parse Apify Grailed actor output into MarketplaceItem."""
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("listing_id", ""))),
+            marketplace="grailed",
+            title=item.get("title", item.get("name", "")),
+            url=item.get("url", ""),
+            price=float(item.get("price", 0)),
+            currency=item.get("currency", "USD"),
+            brand=item.get("designer", item.get("brand", "")),
+            size=item.get("size", ""),
+            image_url=item.get("image", item.get("cover_photo", "")),
+            condition=item.get("condition", ""),
+            seller_name=item.get("seller", {}).get("username", "")
+            if isinstance(item.get("seller"), dict)
+            else str(item.get("seller", "")),
+        )
+
+    def _parse_generic_result(
+        self, item: dict, marketplace: str
+    ) -> MarketplaceItem:
+        """Generic parser — tries common field names. Handles malformed data."""
+        try:
+            price = float(item.get("price", 0))
+        except (ValueError, TypeError):
+            price = 0.0
+
+        return MarketplaceItem(
+            item_id=str(
+                item.get("id", item.get("item_id", item.get("listing_id", "")))
+            ),
+            marketplace=marketplace,
+            title=item.get("title", item.get("name", "")),
+            url=item.get("url", item.get("link", "")),
+            price=price,
+            currency=item.get("currency", "USD"),
+            brand=item.get("brand", item.get("designer", "")),
+            size=item.get("size", ""),
+            image_url=item.get("image", item.get("photo", item.get("image_url", ""))),
+            condition=item.get("condition", ""),
+        )
+
+    def _parse_result(self, item: dict, marketplace: str) -> MarketplaceItem:
+        """Route to marketplace-specific parser."""
+        parsers = {
+            "vinted": self._parse_vinted_result,
+            "grailed": self._parse_grailed_result,
+        }
+        parser = parsers.get(marketplace, lambda i: self._parse_generic_result(i, marketplace))
+        try:
+            return parser(item)
+        except Exception as e:
+            logger.warning(f"Apify parse error for {marketplace}: {e}")
+            return self._parse_generic_result(item, marketplace)
+
+    def _do_search(self, params: SearchParams) -> SearchResult:
+        """Run Apify Actor and collect results.
+
+        Uses params.category to determine which marketplace Actor to run.
+        E.g. category="vinted" → runs bebity/vinted-premium-actor.
+        Defaults to "vinted" if category is empty.
+        """
+        # Determine which marketplace to search via category field
+        marketplace = params.category if params.category else "vinted"
+
+        actor_id = self.ACTOR_MAP.get(marketplace)
+        if not actor_id:
+            supported = ", ".join(self.ACTOR_MAP.keys())
+            raise RuntimeError(
+                f"Apify: no Actor configured for '{marketplace}'. "
+                f"Supported: {supported}"
+            )
+
+        # 1. Start Actor run
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        actor_input = self._build_actor_input(marketplace, params)
+
+        start_url = f"{self.base_url}/acts/{actor_id}/runs"
+        logger.info(f"Apify: starting {actor_id} for '{params.query}'")
+
+        resp = self._client.post(
+            start_url,
+            json=actor_input,
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        run_data = resp.json().get("data", {})
+        run_id = run_data.get("id")
+        dataset_id = run_data.get("defaultDatasetId")
+
+        if not run_id:
+            raise RuntimeError("Apify: failed to start Actor run")
+
+        # 2. Poll for completion
+        status_url = f"{self.base_url}/actor-runs/{run_id}"
+        elapsed = 0
+        while elapsed < self.ACTOR_TIMEOUT:
+            time.sleep(self.POLL_INTERVAL)
+            elapsed += self.POLL_INTERVAL
+
+            status_resp = self._client.get(status_url, headers=headers)
+            status_resp.raise_for_status()
+            status = status_resp.json().get("data", {}).get("status")
+
+            if status == "SUCCEEDED":
+                break
+            elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
+                error_msg = status_resp.json().get("data", {}).get("statusMessage", status)
+                raise RuntimeError(f"Apify Actor {status}: {error_msg}")
+
+        if elapsed >= self.ACTOR_TIMEOUT:
+            raise RuntimeError(
+                f"Apify: Actor timed out after {self.ACTOR_TIMEOUT}s"
+            )
+
+        # 3. Fetch results from dataset
+        if not dataset_id:
+            dataset_id = run_data.get("defaultDatasetId", "")
+
+        items_url = f"{self.base_url}/datasets/{dataset_id}/items"
+        items_resp = self._client.get(
+            items_url,
+            headers=headers,
+            params={"limit": params.limit, "format": "json"},
+        )
+        items_resp.raise_for_status()
+        raw_items = items_resp.json()
+
+        # 4. Parse into MarketplaceItems
+        items = []
+        for raw in raw_items:
+            try:
+                item = self._parse_result(raw, marketplace)
+                if item.title:  # Skip empty items
+                    items.append(item)
+            except Exception as e:
+                logger.warning(f"Apify: skip item parse error: {e}")
+
+        return SearchResult(
+            marketplace=f"apify:{marketplace}",
+            query=params.query,
+            total_found=len(items),
+            items=items,
+            page=1,
+            pages_total=1,
+        )
+
+    def _do_get_item(self, item_id: str) -> ItemDetails | None:
+        """Apify doesn't support individual item fetch by default."""
+        return None
+
+    def get_item_url(self, item_id: str) -> str:
+        """Can't construct URL without knowing marketplace."""
+        return ""
+
+
+# =============================================================================
 # PROVIDER REGISTRY
 # =============================================================================
 
@@ -1252,6 +1527,7 @@ PROVIDER_CLASSES = [
     GrailedProvider,
     VestiaireProvider,
     DepopProvider,
+    ApifyProvider,
 ]
 
 _providers: dict[str, BaseMarketplaceProvider] | None = None
@@ -1296,4 +1572,4 @@ def get_best_marketplace_for_category(category: str) -> tuple[str, str] | None:
     return None
 
 
-VALID_MARKETPLACES = ["vinted", "ebay", "grailed", "vestiaire", "depop"]
+VALID_MARKETPLACES = ["vinted", "ebay", "grailed", "vestiaire", "depop", "apify"]

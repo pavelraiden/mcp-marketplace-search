@@ -1,7 +1,7 @@
 """MCP tools for marketplace search.
 
-12 tools total:
-- 5 search_* tools (one per marketplace)
+13 tools total:
+- 6 search_* tools (one per marketplace + apify meta-provider)
 - 3 orchestrator tools (search_all, search_smart, marketplace_health)
 - 2 item tools (get_item, compare_prices)
 - 2 utility tools (search_history, list_marketplaces)
@@ -135,10 +135,10 @@ def _search_marketplace(
 # =============================================================================
 
 def register_tools(mcp: FastMCP):
-    """Register all 12 tools with the MCP server."""
+    """Register all 13 tools with the MCP server."""
 
     # =========================================================================
-    # 5 MARKETPLACE SEARCH TOOLS
+    # 6 MARKETPLACE SEARCH TOOLS
     # =========================================================================
 
     @mcp.tool()
@@ -237,6 +237,94 @@ def register_tools(mcp: FastMCP):
             "depop", query, brand, min_price, max_price,
             "", "", sort, limit, "US",
         )
+
+    @mcp.tool()
+    def search_apify(
+        query: str,
+        target_marketplace: str = "vinted",
+        brand: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
+        limit: int = 20,
+    ) -> str:
+        """Search via Apify cloud scraping (fallback provider).
+        Uses Apify Actors to scrape marketplaces in the cloud.
+        No cookies/auth needed for target marketplace — only APIFY_API_TOKEN.
+
+        target_marketplace: which marketplace to scrape via Apify.
+            Supported: vinted (default), grailed. More coming soon.
+        limit: max items to return (default 20).
+
+        Use this when direct marketplace scraping fails (cookies expired, rate limited).
+        Requires APIFY_API_TOKEN env var ($29/mo Apify plan)."""
+        db = get_db()
+        provider = get_provider("apify")
+
+        if not provider.is_available():
+            return (
+                "ERROR: Apify is not configured.\n"
+                "Set APIFY_API_TOKEN environment variable.\n"
+                "Get a token at https://console.apify.com/account/integrations"
+            )
+
+        # Validate target marketplace
+        supported = provider.get_supported_marketplaces()
+        if target_marketplace not in supported:
+            return (
+                f"ERROR: Apify doesn't support '{target_marketplace}' yet.\n"
+                f"Supported marketplaces: {', '.join(supported)}"
+            )
+
+        # Pass target_marketplace via category field
+        params = SearchParams(
+            query=query,
+            category=target_marketplace,
+            brand=brand,
+            min_price=min_price,
+            max_price=max_price,
+            limit=limit,
+        )
+
+        try:
+            result = provider.search(params)
+        except Exception as e:
+            error_msg = f"ERROR: Apify search failed for {target_marketplace}: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return error_msg
+
+        # Save to DB
+        search_id = db.save_search(
+            query=query,
+            marketplace=f"apify:{target_marketplace}",
+            brand=brand or None,
+            min_price=min_price if min_price > 0 else None,
+            max_price=max_price if max_price > 0 else None,
+            total_results=result.total_found,
+            items_returned=len(result.items),
+            duration_ms=result.duration_ms,
+        )
+        if result.items:
+            db.save_search_items(search_id, [item.to_dict() for item in result.items])
+
+        # Format output
+        output = f"## Apify → {target_marketplace.upper()} Search Results\n\n"
+        output += f"**Query:** {query}"
+        if brand:
+            output += f" | **Brand:** {brand}"
+        if min_price > 0 or max_price > 0:
+            output += f" | **Price:** {min_price or '?'}-{max_price or '?'}"
+        output += f"\n**Found:** {result.total_found} items | "
+        output += f"**Showing:** {len(result.items)} | "
+        output += f"**Time:** {result.duration_ms}ms\n"
+        output += f"**Provider:** Apify (cloud scraping) | **Search ID:** `{search_id}`\n\n"
+
+        output += _format_items(result.items, max_items=limit)
+
+        if len(output) > MAX_OUTPUT_CHARS:
+            output = output[:MAX_OUTPUT_CHARS]
+            output += "\n\n[TRUNCATED]"
+
+        return output
 
     # =========================================================================
     # 3 ORCHESTRATOR TOOLS

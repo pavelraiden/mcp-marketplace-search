@@ -13,7 +13,7 @@ from server.providers import (
     get_providers, get_provider, get_available_providers,
     get_best_marketplace_for_category, get_health, get_all_health,
     VintedProvider, EbayProvider, GrailedProvider,
-    VestiaireProvider, DepopProvider,
+    VestiaireProvider, DepopProvider, ApifyProvider,
 )
 
 
@@ -116,9 +116,9 @@ class TestProviderHealth:
 # =============================================================================
 
 class TestMarketplaceRegistry:
-    def test_all_5_marketplaces_registered(self):
-        assert len(MARKETPLACE_REGISTRY) == 5
-        expected = {"vinted", "ebay", "grailed", "vestiaire", "depop"}
+    def test_all_6_marketplaces_registered(self):
+        assert len(MARKETPLACE_REGISTRY) == 6
+        expected = {"vinted", "ebay", "grailed", "vestiaire", "depop", "apify"}
         assert set(MARKETPLACE_REGISTRY.keys()) == expected
 
     def test_vinted_capabilities(self):
@@ -194,8 +194,8 @@ class TestCategoryRouting:
 # =============================================================================
 
 class TestProviderClasses:
-    def test_5_provider_classes(self):
-        assert len(PROVIDER_CLASSES) == 5
+    def test_6_provider_classes(self):
+        assert len(PROVIDER_CLASSES) == 6
 
     def test_all_have_required_attrs(self):
         for cls in PROVIDER_CLASSES:
@@ -253,6 +253,9 @@ class TestProviderInstantiation:
             if p.name == "vinted":
                 # With VINTED_COOKIE set, should be available
                 assert p.is_available() is True
+            elif p.name == "apify":
+                # With APIFY_API_TOKEN set, should be available
+                assert p.is_available() is True
             else:
                 assert p.is_available() is True, f"{p.name} not available"
 
@@ -266,9 +269,10 @@ class TestProviderRegistry:
 
     def test_get_providers_returns_all(self):
         providers = get_providers()
-        assert len(providers) == 5
+        assert len(providers) == 6
         assert "vinted" in providers
         assert "ebay" in providers
+        assert "apify" in providers
 
     def test_get_provider_by_name(self):
         p = get_provider("vinted")
@@ -456,3 +460,229 @@ class TestGrailedProvider:
         p = GrailedProvider()
         result = p._do_get_item("12345")
         assert result is None
+
+
+# =============================================================================
+# APIFY PROVIDER SPECIFIC TESTS
+# =============================================================================
+
+class TestApifyProvider:
+    def test_init(self):
+        p = ApifyProvider()
+        assert p.name == "apify"
+        assert p.display_name == "Apify (Cloud Scraping)"
+        assert p.api_key_env == "APIFY_API_TOKEN"
+        assert p.base_url == "https://api.apify.com/v2"
+
+    def test_is_available_with_token(self):
+        p = ApifyProvider()
+        assert p.is_available() is True
+
+    def test_is_available_without_token(self):
+        p = ApifyProvider()
+        p._token = ""
+        assert p.is_available() is False
+
+    def test_actor_map_has_vinted_and_grailed(self):
+        assert "vinted" in ApifyProvider.ACTOR_MAP
+        assert "grailed" in ApifyProvider.ACTOR_MAP
+        assert ApifyProvider.ACTOR_MAP["vinted"] == "bebity/vinted-premium-actor"
+        assert ApifyProvider.ACTOR_MAP["grailed"] == "benthepythondev/grailed-scraper"
+
+    def test_get_supported_marketplaces(self):
+        p = ApifyProvider()
+        supported = p.get_supported_marketplaces()
+        assert "vinted" in supported
+        assert "grailed" in supported
+        assert isinstance(supported, list)
+
+    def test_build_actor_input_vinted(self):
+        p = ApifyProvider()
+        params = SearchParams(
+            query="nike air max",
+            min_price=10.0,
+            max_price=100.0,
+            brand="Nike",
+            limit=15,
+        )
+        inp = p._build_actor_input("vinted", params)
+        assert inp["search"] == "nike air max"
+        assert inp["maxItems"] == 15
+        assert inp["priceFrom"] == 10.0
+        assert inp["priceTo"] == 100.0
+        assert inp["brand"] == "Nike"
+        assert "url" in inp
+        assert "vinted." in inp["url"]
+
+    def test_build_actor_input_vinted_no_price_filter(self):
+        p = ApifyProvider()
+        params = SearchParams(query="test", limit=20)
+        inp = p._build_actor_input("vinted", params)
+        assert "priceFrom" not in inp
+        assert "priceTo" not in inp
+
+    def test_build_actor_input_grailed(self):
+        p = ApifyProvider()
+        params = SearchParams(
+            query="rick owens",
+            min_price=50.0,
+            max_price=500.0,
+            limit=10,
+        )
+        inp = p._build_actor_input("grailed", params)
+        assert inp["searchQuery"] == "rick owens"
+        assert inp["maxItems"] == 10
+        assert inp["minPrice"] == 50.0
+        assert inp["maxPrice"] == 500.0
+
+    def test_build_actor_input_generic(self):
+        p = ApifyProvider()
+        params = SearchParams(query="test item", limit=5)
+        inp = p._build_actor_input("unknown_marketplace", params)
+        assert inp["search"] == "test item"
+        assert inp["maxItems"] == 5
+
+    def test_parse_vinted_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": 12345,
+            "title": "Nike Air Max 90",
+            "url": "https://www.vinted.fr/items/12345",
+            "price": 45.0,
+            "currency": "EUR",
+            "brand_title": "Nike",
+            "size_title": "42",
+            "photo": "https://img.vinted.net/photo1.jpg",
+            "status": "very_good",
+            "city": "Paris",
+            "user": {"login": "fashionista99"},
+        }
+        item = p._parse_vinted_result(raw)
+        assert item.item_id == "12345"
+        assert item.marketplace == "vinted"
+        assert item.title == "Nike Air Max 90"
+        assert item.price == 45.0
+        assert item.currency == "EUR"
+        assert item.brand == "Nike"
+        assert item.size == "42"
+        assert item.image_url == "https://img.vinted.net/photo1.jpg"
+        assert item.seller_name == "fashionista99"
+
+    def test_parse_vinted_result_fallback_fields(self):
+        """Test that parser handles alternative field names."""
+        p = ApifyProvider()
+        raw = {
+            "item_id": "99999",
+            "title": "Test Item",
+            "path": "/items/99999",
+            "total_item_price": 30.0,
+            "brand": "Adidas",
+            "size": "L",
+            "image_url": "https://img.test/photo.jpg",
+            "user": "simple_string_user",
+        }
+        item = p._parse_vinted_result(raw)
+        assert item.item_id == "99999"
+        assert item.url == "/items/99999"
+        assert item.price == 30.0
+        assert item.brand == "Adidas"
+        assert item.seller_name == "simple_string_user"
+
+    def test_parse_grailed_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": 67890,
+            "title": "Rick Owens DRKSHDW",
+            "url": "https://www.grailed.com/listings/67890",
+            "price": 350.0,
+            "currency": "USD",
+            "designer": "Rick Owens",
+            "size": "M",
+            "image": "https://img.grailed.com/photo.jpg",
+            "condition": "like_new",
+            "seller": {"username": "archive_dealer"},
+        }
+        item = p._parse_grailed_result(raw)
+        assert item.item_id == "67890"
+        assert item.marketplace == "grailed"
+        assert item.title == "Rick Owens DRKSHDW"
+        assert item.price == 350.0
+        assert item.brand == "Rick Owens"
+        assert item.seller_name == "archive_dealer"
+
+    def test_parse_generic_result(self):
+        p = ApifyProvider()
+        raw = {
+            "id": "abc",
+            "title": "Generic Item",
+            "url": "https://example.com/item/abc",
+            "price": 25.0,
+            "currency": "GBP",
+            "brand": "TestBrand",
+        }
+        item = p._parse_generic_result(raw, "test_marketplace")
+        assert item.item_id == "abc"
+        assert item.marketplace == "test_marketplace"
+        assert item.title == "Generic Item"
+        assert item.price == 25.0
+
+    def test_parse_result_routes_to_correct_parser(self):
+        p = ApifyProvider()
+        vinted_raw = {"id": 1, "title": "V", "price": 10, "url": "u", "currency": "EUR"}
+        grailed_raw = {"id": 2, "title": "G", "price": 20, "url": "u", "currency": "USD"}
+        unknown_raw = {"id": 3, "title": "U", "price": 30, "url": "u", "currency": "GBP"}
+
+        v = p._parse_result(vinted_raw, "vinted")
+        assert v.marketplace == "vinted"
+
+        g = p._parse_result(grailed_raw, "grailed")
+        assert g.marketplace == "grailed"
+
+        u = p._parse_result(unknown_raw, "depop")
+        assert u.marketplace == "depop"
+
+    def test_parse_result_handles_error_gracefully(self):
+        """If marketplace-specific parser fails, falls back to generic."""
+        p = ApifyProvider()
+        # Cause error by passing non-dict for nested field
+        raw = {"id": "x", "title": "Test", "price": "not_a_number", "url": "u"}
+        # Should not raise — fallback to generic parser
+        item = p._parse_result(raw, "vinted")
+        assert item.title == "Test"
+
+    def test_do_get_item_returns_none(self):
+        """Apify doesn't support individual item fetch."""
+        p = ApifyProvider()
+        result = p._do_get_item("12345")
+        assert result is None
+
+    def test_get_item_url_empty(self):
+        p = ApifyProvider()
+        assert p.get_item_url("12345") == ""
+
+    def test_actor_timeout_and_poll_interval(self):
+        assert ApifyProvider.ACTOR_TIMEOUT == 120
+        assert ApifyProvider.POLL_INTERVAL == 3
+
+    def test_min_request_interval(self):
+        p = ApifyProvider()
+        assert p.min_request_interval == 1.0
+
+    def test_marketplace_registry_has_apify(self):
+        assert "apify" in MARKETPLACE_REGISTRY
+        cap = MARKETPLACE_REGISTRY["apify"]
+        assert cap.has_api is True
+        assert cap.requires_auth == "api_key"
+        assert "cloud_scraping" in cap.strengths
+        assert "fallback" in cap.strengths
+
+    def test_valid_marketplaces_includes_apify(self):
+        assert "apify" in VALID_MARKETPLACES
+
+    def test_category_routing_has_apify_fallback(self):
+        """Apify should appear as fallback in category routing."""
+        categories_with_apify = [
+            cat for cat, chain in CATEGORY_ROUTING.items()
+            if any(m == "apify" for m, r in chain)
+        ]
+        assert len(categories_with_apify) >= 5  # At least 5 categories have apify

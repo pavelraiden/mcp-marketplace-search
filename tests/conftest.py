@@ -10,6 +10,7 @@ os.environ["EBAY_API_KEY"] = "test_ebay_key_12345"
 os.environ["GRAILED_ALGOLIA_KEY"] = "test_grailed_algolia_key"
 os.environ["VESTIAIRE_COOKIE"] = "test_vestiaire_cookie=xyz"
 os.environ["DEPOP_COOKIE"] = "test_depop_cookie=def456"
+os.environ["APIFY_API_TOKEN"] = "test_apify_token_abc123"
 
 
 @pytest.fixture
