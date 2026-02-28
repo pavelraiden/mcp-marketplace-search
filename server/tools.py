@@ -851,36 +851,74 @@ def register_tools(mcp: FastMCP):
     ) -> str:
         """Compare prices for the same item across multiple marketplaces.
         Returns average, min, max prices per marketplace for quick comparison.
+        Supports both direct providers and Apify cloud actors.
 
-        marketplaces: comma-separated list, or empty for all available."""
+        marketplaces: comma-separated list (e.g. "ebay,grailed,vestiaire"),
+                      or empty for all available (direct + Apify)."""
         all_providers = get_providers()
         available = get_available_providers()
 
+        # Apify fallback for cloud scraping
+        apify_provider = all_providers.get("apify")
+        apify_available = apify_provider and apify_provider.is_available()
+        apify_marketplaces = (
+            apify_provider.get_supported_marketplaces() if apify_available else []
+        )
+
         if marketplaces:
-            target = [m.strip() for m in marketplaces.split(",") if m.strip() in available]
+            requested = [m.strip() for m in marketplaces.split(",") if m.strip()]
+            # Accept marketplaces reachable via direct OR Apify
+            target = [
+                m for m in requested
+                if m in available or (m in apify_marketplaces and apify_available)
+            ]
         else:
-            target = available
+            # All reachable marketplaces (direct + Apify)
+            target = list(
+                set(available)
+                | (set(apify_marketplaces) if apify_available else set())
+            )
+            target = [m for m in target if m != "apify"]
 
         if len(target) < 2:
-            return "ERROR: Need at least 2 marketplaces to compare. " + f"Available: {', '.join(available)}"
+            return (
+                "ERROR: Need at least 2 marketplaces to compare.\n"
+                f"Available: {', '.join(sorted(set(available) | set(apify_marketplaces)))}"
+            )
 
-        params = SearchParams(query=query, brand=brand, limit=10)
-
-        # Search all in parallel
+        # Search all in parallel with Apify fallback
+        TIMEOUT = 120
         results = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(target)) as executor:
+
+        def _compare_one(mname):
+            try:
+                provider = all_providers.get(mname)
+                if provider and provider.is_available():
+                    params = SearchParams(query=query, brand=brand, limit=10)
+                    return (mname, provider.search(params))
+                elif apify_available and mname in apify_marketplaces:
+                    params = SearchParams(
+                        query=query, category=mname, brand=brand, limit=10,
+                    )
+                    return (mname, apify_provider.search(params))
+                else:
+                    return (mname, None)
+            except Exception as e:
+                logger.warning(f"Price compare failed for {mname}: {e}")
+                return (mname, None)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(target), 5)) as executor:
             futures = {
-                executor.submit(lambda m=m: (m, all_providers[m].search(params))): m
-                for m in target
+                executor.submit(_compare_one, m): m for m in target
             }
-            for future in concurrent.futures.as_completed(futures, timeout=30):
-                try:
-                    mname, result = future.result()
-                    results[mname] = result
-                except Exception as e:
-                    mname = futures[future]
-                    results[mname] = None
-                    logger.warning(f"Price compare failed for {mname}: {e}")
+            done, not_done = concurrent.futures.wait(futures.keys(), timeout=TIMEOUT)
+            for future in done:
+                mname, result = future.result()
+                results[mname] = result
+            for future in not_done:
+                future.cancel()
+                mname = futures[future]
+                results[mname] = None
 
         # Build comparison
         output = f"# Price Comparison: {query}\n\n"
@@ -890,10 +928,14 @@ def register_tools(mcp: FastMCP):
         output += "| Marketplace | Min | Max | Avg | Items | Currency |\n"
         output += "|:------------|----:|----:|----:|------:|:--------:|\n"
 
-        for mname in target:
+        best_marketplace = None
+        best_avg = float("inf")
+
+        for mname in sorted(target):
             result = results.get(mname)
-            if not result or not result.items:
-                output += f"| {mname} | — | — | — | 0 | — |\n"
+            if not result or result.error or not result.items:
+                status = result.error[:30] if result and result.error else "No data"
+                output += f"| {mname} | — | — | — | 0 | {status} |\n"
                 continue
 
             prices = [item.price for item in result.items if item.price > 0]
@@ -906,10 +948,17 @@ def register_tools(mcp: FastMCP):
             avg_p = sum(prices) / len(prices)
             currency = result.items[0].currency
 
+            if avg_p < best_avg:
+                best_avg = avg_p
+                best_marketplace = mname
+
             output += (
                 f"| {mname} | {min_p:.0f} | {max_p:.0f} | {avg_p:.0f} | "
                 f"{len(prices)} | {currency} |\n"
             )
+
+        if best_marketplace:
+            output += f"\n**Best average price:** {best_marketplace} ({best_avg:.0f})\n"
 
         output += "\n*Note: Prices may be in different currencies. Check marketplace for exact rates.*"
 
