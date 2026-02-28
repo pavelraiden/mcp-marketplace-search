@@ -652,33 +652,78 @@ def register_tools(mcp: FastMCP):
     ) -> str:
         """Smart-route search to the BEST marketplace for an item category.
         Automatically selects optimal marketplace based on category routing.
+        Falls back to Apify cloud actors when direct providers are unavailable.
 
         Categories: clothing, shoes, accessories, bags, luxury, streetwear,
         vintage, electronics, furniture, sports, kids, home, general.
 
         Example: search_smart("Jordan 4", category="shoes")
-        → Routes to Vinted (EU) as first choice for shoes."""
+        → Routes to best available marketplace for shoes."""
         valid_cats = list(CATEGORY_ROUTING.keys())
         if category not in valid_cats:
             return f"ERROR: Unknown category '{category}'. Available: {', '.join(valid_cats)}"
 
-        best = get_best_marketplace_for_category(category)
-        if not best:
-            return f"ERROR: No marketplaces available for '{category}'."
-
-        marketplace_name, region = best
-        route_chain = CATEGORY_ROUTING.get(category, [])
+        all_providers = get_providers()
+        route_chain = CATEGORY_ROUTING.get(category, CATEGORY_ROUTING["general"])
         chain_str = " → ".join(f"{m}({r})" for m, r in route_chain)
 
-        result = _search_marketplace(
-            marketplace_name, query, brand, min_price, max_price,
-            "", "", "relevance", limit, region,
+        # Try direct provider first, then Apify fallback for each marketplace
+        apify_provider = all_providers.get("apify")
+        apify_available = apify_provider and apify_provider.is_available()
+        apify_marketplaces = (
+            apify_provider.get_supported_marketplaces() if apify_available else []
         )
 
-        header = (
-            f"🎯 **Smart Routing** → `{category}` → **{marketplace_name}** ({region})\n"
-            f"Route chain: {chain_str}\n\n"
-        )
+        # Find the best available marketplace (direct or via Apify)
+        chosen_marketplace = None
+        chosen_region = ""
+        use_apify = False
+
+        for mp_name, region in route_chain:
+            if mp_name == "apify":
+                # Skip generic "apify" entry — we handle Apify per-marketplace
+                continue
+            # Check direct provider
+            direct = all_providers.get(mp_name)
+            if direct and direct.is_available() and get_health(mp_name).is_healthy():
+                chosen_marketplace = mp_name
+                chosen_region = region
+                use_apify = False
+                break
+            # Check Apify fallback for this marketplace
+            if apify_available and mp_name in apify_marketplaces:
+                chosen_marketplace = mp_name
+                chosen_region = region
+                use_apify = True
+                break
+
+        if not chosen_marketplace:
+            return f"ERROR: No marketplaces available for '{category}'."
+
+        if use_apify:
+            # Search via Apify with correct target marketplace
+            result = _search_via_apify(
+                target_marketplace=chosen_marketplace,
+                display_name=chosen_marketplace.capitalize(),
+                query=query, brand=brand,
+                min_price=min_price, max_price=max_price,
+                limit=limit, region=chosen_region,
+            )
+            header = (
+                f"🎯 **Smart Routing** → `{category}` → **{chosen_marketplace}** "
+                f"(via Apify, {chosen_region})\n"
+                f"Route chain: {chain_str}\n\n"
+            )
+        else:
+            result = _search_marketplace(
+                chosen_marketplace, query, brand, min_price, max_price,
+                "", "", "relevance", limit, chosen_region,
+            )
+            header = (
+                f"🎯 **Smart Routing** → `{category}` → **{chosen_marketplace}** "
+                f"({chosen_region})\n"
+                f"Route chain: {chain_str}\n\n"
+            )
         return header + result
 
     @mcp.tool()
