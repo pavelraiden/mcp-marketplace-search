@@ -1,0 +1,16 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+data/
+tests/
+sessions/
+*.md
+.env
+.env.example
+docker-compose*.yml
+Dockerfile

@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  marketplace-api:
+    build: .
+    container_name: marketplace-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APIFY_API_TOKEN=${APIFY_API_TOKEN}
+      - MARKETPLACE_DB_PATH=/app/data/marketplace.db
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - marketplace-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  marketplace-data:
