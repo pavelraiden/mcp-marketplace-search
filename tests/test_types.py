@@ -211,6 +211,28 @@ class TestSearchResult:
         assert "100 total" in summary
         assert "450ms" in summary
 
+    def test_error_field_default_empty(self):
+        result = SearchResult(
+            items=[], total_found=0, marketplace="test", query="q"
+        )
+        assert result.error == ""
+
+    def test_error_field_set(self):
+        result = SearchResult(
+            items=[], total_found=0, marketplace="test", query="q",
+            error="Actor not rented"
+        )
+        assert result.error == "Actor not rented"
+
+    def test_to_summary_with_error(self):
+        result = SearchResult(
+            items=[], total_found=0, marketplace="apify:vinted", query="q",
+            error="Actor timed out"
+        )
+        summary = result.to_summary()
+        assert "ERROR" in summary
+        assert "Actor timed out" in summary
+
 
 # =============================================================================
 # ITEM DETAILS TESTS

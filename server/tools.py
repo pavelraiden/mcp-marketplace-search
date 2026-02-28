@@ -93,6 +93,14 @@ def _search_marketplace(
         logger.error(error_msg, exc_info=True)
         return error_msg
 
+    # Handle graceful errors (e.g. actor-is-not-rented, timeout)
+    if result.error:
+        return (
+            f"## {provider.display_name} Search Error\n\n"
+            f"**Query:** {query}\n"
+            f"**Error:** {result.error}\n"
+        )
+
     # Save to DB
     search_id = db.save_search(
         query=query,
@@ -294,6 +302,14 @@ def register_tools(mcp: FastMCP):
             logger.error(error_msg, exc_info=True)
             return error_msg
 
+        # Handle graceful errors (actor-is-not-rented, timeout, etc.)
+        if result.error:
+            return (
+                f"## Apify → {target_marketplace.upper()} Search Error\n\n"
+                f"**Query:** {query}\n"
+                f"**Error:** {result.error}\n"
+            )
+
         # Save to DB
         search_id = db.save_search(
             query=query,
@@ -369,6 +385,14 @@ def register_tools(mcp: FastMCP):
             error_msg = f"ERROR: {display_name} search failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return error_msg
+
+        # Handle graceful errors (actor-is-not-rented, timeout, etc.)
+        if result.error:
+            return (
+                f"## {display_name} Search Error (via Apify)\n\n"
+                f"**Query:** {query}\n"
+                f"**Error:** {result.error}\n"
+            )
 
         # Save to DB
         search_id = db.save_search(

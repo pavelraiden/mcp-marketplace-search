@@ -218,6 +218,7 @@ This MCP server is the **search infrastructure** for VintedFlip project.
   - `4b08c3a` — docs: roadmap, session log, test documentation
   - `99289d4` — feat: ApifyProvider as cloud scraping fallback (v1.2)
   - `b9ff83b` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
+  - `7aaf866` — fix: update stale test counts, add APIFY_API_TOKEN to configs
 
 ## Created
 

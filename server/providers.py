@@ -1323,8 +1323,9 @@ class ApifyProvider(BaseMarketplaceProvider):
     }
 
     # Max wait time for Actor run (seconds)
-    ACTOR_TIMEOUT = 120
-    POLL_INTERVAL = 3
+    # 300s = 5 min — some actors (Vestiaire, OLX) need 2-4 min for scraping
+    ACTOR_TIMEOUT = 300
+    POLL_INTERVAL = 5
 
     def __init__(self):
         super().__init__()
@@ -1391,13 +1392,13 @@ class ApifyProvider(BaseMarketplaceProvider):
             }
 
         elif marketplace == "vestiaire":
-            # parseforge/vestiairecollective-scraper uses URL-based input
+            # parseforge/vestiairecollective-scraper uses startUrl (singular!)
             import urllib.parse
             query_parts = [params.brand, params.query] if params.brand else [params.query]
             query_encoded = urllib.parse.quote_plus(" ".join(p for p in query_parts if p))
             search_url = f"https://www.vestiairecollective.com/search/?q={query_encoded}"
             return {
-                "startUrls": [search_url],
+                "startUrl": search_url,
                 "maxItems": params.limit,
             }
 
@@ -1516,7 +1517,14 @@ class ApifyProvider(BaseMarketplaceProvider):
         )
 
     def _parse_vestiaire_result(self, item: dict) -> MarketplaceItem:
-        """Parse parseforge/vestiairecollective-scraper output."""
+        """Parse parseforge/vestiairecollective-scraper output.
+
+        Real API response keys (verified 2026-02-28):
+        productId, productName, brandName, price (int), priceCurrency,
+        productUrl, imageUrl, imageUrls[], likes, sellerName, country,
+        description, colors[], sold, modelName
+        """
+        # Price: flat int/float or legacy dict format
         try:
             price_raw = item.get("price", item.get("salePrice", 0))
             if isinstance(price_raw, dict):
@@ -1525,30 +1533,52 @@ class ApifyProvider(BaseMarketplaceProvider):
                 price = float(price_raw)
         except (ValueError, TypeError):
             price = 0.0
-        brand_raw = item.get("brand", item.get("designer", ""))
+
+        # Brand: flat string (brandName) or legacy dict
+        brand_raw = item.get("brandName", item.get("brand", item.get("designer", "")))
         if isinstance(brand_raw, dict):
             brand_raw = brand_raw.get("name", "")
-        images = item.get("pictures", item.get("images", []))
-        image_url = ""
-        if images:
-            if isinstance(images[0], dict):
-                image_url = images[0].get("url", images[0].get("path", ""))
-            else:
-                image_url = str(images[0])
+
+        # Image: flat string (imageUrl) or legacy list
+        image_url = item.get("imageUrl", "")
+        if not image_url:
+            images = item.get("imageUrls", item.get("pictures", item.get("images", [])))
+            if images:
+                if isinstance(images[0], dict):
+                    image_url = images[0].get("url", images[0].get("path", ""))
+                else:
+                    image_url = str(images[0])
+
+        # All image URLs
+        image_urls = item.get("imageUrls", [])
+
+        # Seller: flat string (sellerName) or legacy dict
+        seller_name = item.get("sellerName", "")
+        if not seller_name and isinstance(item.get("seller"), dict):
+            seller_name = item["seller"].get("username", "")
+
+        # Location: flat string (country) or legacy dict
+        location = item.get("country", "")
+        if not location and isinstance(item.get("seller"), dict):
+            location = item["seller"].get("country", "")
+
         return MarketplaceItem(
-            item_id=str(item.get("id", item.get("productId", ""))),
+            item_id=str(item.get("productId", item.get("id", ""))),
             marketplace="vestiaire",
-            title=item.get("name", item.get("title", "")),
-            url=item.get("url", item.get("link", "")),
+            title=item.get("productName", item.get("name", item.get("title", ""))),
+            url=item.get("productUrl", item.get("url", item.get("link", ""))),
             price=price,
-            currency=item.get("currency", "EUR"),
+            currency=item.get("priceCurrency", item.get("currency", "EUR")),
             brand=str(brand_raw),
             condition=item.get("condition", ""),
+            description=item.get("description", ""),
             image_url=image_url,
-            seller_name=item.get("seller", {}).get("username", "")
-            if isinstance(item.get("seller"), dict) else "",
-            location=item.get("seller", {}).get("country", "")
-            if isinstance(item.get("seller"), dict) else "",
+            image_urls=image_urls,
+            seller_name=seller_name,
+            favorites=int(item.get("likes", 0)),
+            location=location,
+            color=", ".join(item.get("colors", [])) if item.get("colors") else "",
+            category=item.get("modelName", ""),
         )
 
     def _parse_depop_result(self, item: dict) -> MarketplaceItem:
@@ -1739,62 +1769,101 @@ class ApifyProvider(BaseMarketplaceProvider):
         Uses params.category to determine which marketplace Actor to run.
         E.g. category="vinted" → runs bebity/vinted-premium-actor.
         Defaults to "vinted" if category is empty.
+
+        Graceful error handling:
+        - 403 (actor-is-not-rented) → returns SearchResult with error, no crash
+        - Timeout → returns SearchResult with error, no crash
+        - Network errors → returns SearchResult with error, no crash
         """
         # Determine which marketplace to search via category field
         marketplace = params.category if params.category else "vinted"
+        error_result = lambda msg: SearchResult(
+            marketplace=f"apify:{marketplace}",
+            query=params.query,
+            total_found=0,
+            items=[],
+            page=1,
+            pages_total=1,
+            error=msg,
+        )
 
         actor_id = self.ACTOR_MAP.get(marketplace)
         if not actor_id:
             supported = ", ".join(self.ACTOR_MAP.keys())
-            raise RuntimeError(
-                f"Apify: no Actor configured for '{marketplace}'. "
+            return error_result(
+                f"No Actor configured for '{marketplace}'. "
                 f"Supported: {supported}"
             )
 
         # 1. Start Actor run
-        headers = {
-            "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
         actor_input = self._build_actor_input(marketplace, params)
 
-        start_url = f"{self.base_url}/acts/{actor_id}/runs"
+        # Apify API requires tilde (~) instead of slash in actor ID
+        # e.g. "bebity/vinted-premium-actor" → "bebity~vinted-premium-actor"
+        safe_actor_id = actor_id.replace("/", "~")
+        start_url = f"{self.base_url}/acts/{safe_actor_id}/runs?token={self._token}"
         logger.info(f"Apify: starting {actor_id} for '{params.query}'")
 
-        resp = self._client.post(
-            start_url,
-            json=actor_input,
-            headers=headers,
-            timeout=30.0,
-        )
-        resp.raise_for_status()
+        try:
+            resp = self._client.post(
+                start_url,
+                json=actor_input,
+                headers=headers,
+                timeout=30.0,
+            )
+        except Exception as e:
+            logger.error(f"Apify: network error starting actor: {e}")
+            return error_result(f"Network error: {e}")
+
+        if resp.status_code == 403:
+            error_body = resp.text[:300]
+            logger.error(f"Apify 403 for {actor_id}: {error_body}")
+            return error_result(
+                f"Actor '{actor_id}' is not rented. "
+                f"Rent it at https://console.apify.com/actors/{actor_id} "
+                f"then retry."
+            )
+        if resp.status_code >= 400:
+            error_body = resp.text[:300]
+            logger.error(f"Apify run failed ({resp.status_code}): {error_body}")
+            return error_result(
+                f"Apify API error {resp.status_code}: {error_body}"
+            )
+
         run_data = resp.json().get("data", {})
         run_id = run_data.get("id")
         dataset_id = run_data.get("defaultDatasetId")
 
         if not run_id:
-            raise RuntimeError("Apify: failed to start Actor run")
+            return error_result("Failed to start Actor run (no run ID)")
 
         # 2. Poll for completion
-        status_url = f"{self.base_url}/actor-runs/{run_id}"
+        status_url = f"{self.base_url}/actor-runs/{run_id}?token={self._token}"
         elapsed = 0
         while elapsed < self.ACTOR_TIMEOUT:
             time.sleep(self.POLL_INTERVAL)
             elapsed += self.POLL_INTERVAL
 
-            status_resp = self._client.get(status_url, headers=headers)
-            status_resp.raise_for_status()
+            try:
+                status_resp = self._client.get(status_url)
+                status_resp.raise_for_status()
+            except Exception as e:
+                logger.warning(f"Apify: poll error at {elapsed}s: {e}")
+                continue
+
             status = status_resp.json().get("data", {}).get("status")
 
             if status == "SUCCEEDED":
                 break
             elif status in ("FAILED", "ABORTED", "TIMED-OUT"):
                 error_msg = status_resp.json().get("data", {}).get("statusMessage", status)
-                raise RuntimeError(f"Apify Actor {status}: {error_msg}")
+                return error_result(f"Actor {status}: {error_msg}")
 
         if elapsed >= self.ACTOR_TIMEOUT:
-            raise RuntimeError(
-                f"Apify: Actor timed out after {self.ACTOR_TIMEOUT}s"
+            return error_result(
+                f"Actor timed out after {self.ACTOR_TIMEOUT}s. "
+                f"Try again or increase timeout."
             )
 
         # 3. Fetch results from dataset
@@ -1802,13 +1871,16 @@ class ApifyProvider(BaseMarketplaceProvider):
             dataset_id = run_data.get("defaultDatasetId", "")
 
         items_url = f"{self.base_url}/datasets/{dataset_id}/items"
-        items_resp = self._client.get(
-            items_url,
-            headers=headers,
-            params={"limit": params.limit, "format": "json"},
-        )
-        items_resp.raise_for_status()
-        raw_items = items_resp.json()
+        try:
+            items_resp = self._client.get(
+                items_url,
+                params={"token": self._token, "limit": params.limit, "format": "json"},
+            )
+            items_resp.raise_for_status()
+            raw_items = items_resp.json()
+        except Exception as e:
+            logger.error(f"Apify: failed to fetch dataset: {e}")
+            return error_result(f"Failed to fetch results: {e}")
 
         # 4. Parse into MarketplaceItems
         items = []

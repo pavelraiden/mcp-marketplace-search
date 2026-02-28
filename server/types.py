@@ -155,9 +155,12 @@ class SearchResult:
     page: int = 1
     pages_total: int = 1
     duration_ms: int = 0
+    error: str = ""   # Non-empty if search failed gracefully
 
     def to_summary(self) -> str:
         """One-line summary for logs."""
+        if self.error:
+            return f"{self.marketplace}: ERROR — {self.error}"
         return (
             f"{self.marketplace}: {len(self.items)} items "
             f"({self.total_found} total) in {self.duration_ms}ms"

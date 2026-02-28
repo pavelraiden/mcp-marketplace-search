@@ -130,7 +130,8 @@ Researched Apify Store for 8 marketplaces, selected best actors:
 
 ### Git Commits
 - `99289d4` — feat: add ApifyProvider as cloud scraping fallback (v1.2)
-- `(pending)` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
+- `b9ff83b` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
+- `7aaf866` — fix: update stale test counts in Architecture section
 
 ### Current State
 - **v1.0 (Core):** DONE ✅ — 5 direct providers, 12 base tools
@@ -138,7 +139,7 @@ Researched Apify Store for 8 marketplaces, selected best actors:
 - **v1.2 (Apify Fallback):** DONE ✅ — ApifyProvider with 2 actors
 - **v1.3 (Apify Expansion):** DONE ✅ — 8 actors, 3 new marketplaces, 16 tools
 - **Tests:** 154/154 passing
-- **GitHub:** `pavelraiden/mcp-marketplace-search` (private), 3 commits (4th pending)
+- **GitHub:** `pavelraiden/mcp-marketplace-search` (private), 5 commits
 
 ### Infrastructure
 
@@ -161,6 +162,14 @@ Researched Apify Store for 8 marketplaces, selected best actors:
 | ERR-007 | 2026-02-27 | Checked `is not None` on float with default 0.0 | For numeric defaults, use `> 0` not `is not None` |
 | ERR-008 | 2026-02-27 | Generic parser float() crashed on malformed data | Always wrap float() in try/except for external data parsing |
 | ERR-009 | 2026-02-28 | Test checked old "fallback" strength after renaming to "8_actors" | When refactoring constants, grep tests for old values |
+| ERR-010 | 2026-02-28 | .mcp.json + claude_desktop_config.json missing APIFY_API_TOKEN | When adding new env-dependent provider, update ALL config files (local + desktop) |
+
+### Post-Mortem Reflexion Findings
+- **CRITICAL:** APIFY_API_TOKEN was missing from both .mcp.json and claude_desktop_config.json — would have broken ALL 8 Apify actors at runtime
+- **MISSED:** Knowledge K110 (Apify patterns) not created — would lose parser/builder patterns between sessions
+- **MISSED:** Soul.md Injection Alerts had no trigger for marketplace/apify tasks
+- **ROOT CAUSE:** Rushed DELIVER step, focused on git commit but skipped config verification
+- **LESSON:** DELIVER checklist must include: verify ALL config files reference new env vars
 
 ### Recovery Protocol
 1. Read this session log for context

@@ -670,8 +670,8 @@ class TestApifyProvider:
         assert p.get_item_url("12345") == ""
 
     def test_actor_timeout_and_poll_interval(self):
-        assert ApifyProvider.ACTOR_TIMEOUT == 120
-        assert ApifyProvider.POLL_INTERVAL == 3
+        assert ApifyProvider.ACTOR_TIMEOUT == 300
+        assert ApifyProvider.POLL_INTERVAL == 5
 
     def test_min_request_interval(self):
         p = ApifyProvider()
@@ -747,8 +747,9 @@ class TestApifyProvider:
         p = ApifyProvider()
         params = SearchParams(query="gucci bag", brand="Gucci", limit=10)
         inp = p._build_actor_input("vestiaire", params)
-        assert "startUrls" in inp
-        assert "vestiairecollective.com" in inp["startUrls"][0]
+        # parseforge actor uses startUrl (singular string), NOT startUrls (plural array)
+        assert "startUrl" in inp
+        assert "vestiairecollective.com" in inp["startUrl"]
         assert inp["maxItems"] == 10
 
     def test_parse_vestiaire_result(self):
@@ -977,3 +978,45 @@ class TestApifyProvider:
         # OLX should be in furniture routing
         furn_chain = [m for m, r in CATEGORY_ROUTING["furniture"]]
         assert "olx" in furn_chain
+
+    # --- Graceful error handling tests ---
+
+    def test_do_search_unsupported_marketplace_returns_error(self):
+        """Unsupported marketplace should return SearchResult with error, not raise."""
+        p = ApifyProvider()
+        params = SearchParams(query="test", category="nonexistent_marketplace")
+        result = p._do_search(params)
+        assert result.error != ""
+        assert "nonexistent_marketplace" in result.error
+        assert result.total_found == 0
+        assert len(result.items) == 0
+
+    def test_search_result_error_field_default(self):
+        """SearchResult.error should default to empty string."""
+        from server.types import SearchResult
+        result = SearchResult(
+            items=[], total_found=0, marketplace="test", query="q"
+        )
+        assert result.error == ""
+
+    def test_search_result_to_summary_with_error(self):
+        """to_summary should show error when present."""
+        from server.types import SearchResult
+        result = SearchResult(
+            items=[], total_found=0, marketplace="test", query="q",
+            error="Actor not rented"
+        )
+        summary = result.to_summary()
+        assert "ERROR" in summary
+        assert "Actor not rented" in summary
+
+    def test_search_result_to_summary_normal(self):
+        """to_summary should show item count when no error."""
+        from server.types import SearchResult
+        result = SearchResult(
+            items=[], total_found=5, marketplace="vinted", query="q",
+            duration_ms=150
+        )
+        summary = result.to_summary()
+        assert "vinted" in summary
+        assert "150ms" in summary
