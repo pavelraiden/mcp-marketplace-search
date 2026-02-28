@@ -499,8 +499,9 @@ def register_tools(mcp: FastMCP):
         Returns combined results from all available marketplaces.
         Use for price comparison or finding best deals across platforms.
 
-        marketplaces: comma-separated (e.g. "vinted,ebay,grailed").
+        marketplaces: comma-separated (e.g. "ebay,grailed,vestiaire").
                       Leave empty to search all available.
+                      Supports both direct providers and Apify cloud actors.
         limit: items per marketplace (default 10)."""
         all_providers = get_providers()
         available = get_available_providers()
@@ -508,39 +509,68 @@ def register_tools(mcp: FastMCP):
         if not available:
             return "ERROR: No marketplaces configured. Set at least one API key."
 
+        # Apify provider for fallback cloud scraping
+        apify_provider = all_providers.get("apify")
+        apify_available = apify_provider and apify_provider.is_available()
+        apify_marketplaces = apify_provider.get_supported_marketplaces() if apify_available else []
+
         # Parse marketplace list
         if marketplaces:
             requested = [m.strip() for m in marketplaces.split(",") if m.strip()]
             invalid = [m for m in requested if m not in VALID_MARKETPLACES]
             if invalid:
                 return f"ERROR: Unknown marketplace(s): {', '.join(invalid)}"
-            target = [m for m in requested if m in available]
+            # Accept marketplaces that have direct provider OR can be reached via Apify
+            target = [
+                m for m in requested
+                if m in available or (m in apify_marketplaces and apify_available)
+            ]
             if not target:
                 return f"ERROR: None of requested marketplaces configured. Available: {', '.join(available)}"
         else:
-            target = available
+            # Default: all available direct + all Apify-supported marketplaces
+            target = list(set(available) | (set(apify_marketplaces) if apify_available else set()))
+            # Remove 'apify' meta-provider itself from target list
+            target = [m for m in target if m != "apify"]
 
-        params = SearchParams(
+        # Build search params (category is set per-marketplace for Apify routing)
+        base_params = SearchParams(
             query=query, brand=brand,
             min_price=min_price, max_price=max_price,
             limit=limit,
         )
 
         # Search all in parallel
-        TIMEOUT = 45  # seconds
+        # Timeout 120s because Apify actors can take 30-60s each
+        TIMEOUT = 120
         results = {}
         start_all = time.monotonic()
 
-        def _call_one(mname, provider):
+        def _call_one(mname):
+            """Search a marketplace via direct provider or Apify fallback."""
             try:
-                result = provider.search(params)
-                return (mname, result, None)
+                provider = all_providers.get(mname)
+                if provider and provider.is_available():
+                    # Direct provider available — use it
+                    result = provider.search(base_params)
+                    return (mname, result, None)
+                elif apify_available and mname in apify_marketplaces:
+                    # Fallback to Apify cloud actor
+                    apify_params = SearchParams(
+                        query=query, category=mname, brand=brand,
+                        min_price=min_price, max_price=max_price,
+                        limit=limit,
+                    )
+                    result = apify_provider.search(apify_params)
+                    return (mname, result, None)
+                else:
+                    return (mname, None, f"Not configured")
             except Exception as e:
                 return (mname, None, str(e))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(target)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(target), 5)) as executor:
             futures = {
-                executor.submit(_call_one, m, all_providers[m]): m
+                executor.submit(_call_one, m): m
                 for m in target
             }
             done, not_done = concurrent.futures.wait(futures.keys(), timeout=TIMEOUT)
