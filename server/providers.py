@@ -1479,41 +1479,109 @@ class ApifyProvider(BaseMarketplaceProvider):
         )
 
     def _parse_grailed_result(self, item: dict) -> MarketplaceItem:
-        """Parse Apify Grailed actor output into MarketplaceItem."""
-        return MarketplaceItem(
-            item_id=str(item.get("id", item.get("listing_id", ""))),
-            marketplace="grailed",
-            title=item.get("title", item.get("name", "")),
-            url=item.get("url", ""),
-            price=float(item.get("price", 0)),
-            currency=item.get("currency", "USD"),
-            brand=item.get("designer", item.get("brand", "")),
-            size=item.get("size", ""),
-            image_url=item.get("image", item.get("cover_photo", "")),
-            condition=item.get("condition", ""),
-            seller_name=item.get("seller", {}).get("username", "")
-            if isinstance(item.get("seller"), dict)
-            else str(item.get("seller", "")),
-        )
+        """Parse vmscrapers/grailed actor output into MarketplaceItem.
 
-    def _parse_ebay_result(self, item: dict) -> MarketplaceItem:
-        """Parse dtrungtin/ebay-items-scraper output."""
+        Real API response keys (verified 2026-02-28):
+        id, title, price (int), designer_names (str), designers (list),
+        size, color, condition, image_url, category, category_path,
+        user{username, seller_score{rating_average, rating_count}},
+        location, follower_count, shipping, sold, price_drops[], created_at
+        """
         try:
             price = float(item.get("price", 0))
         except (ValueError, TypeError):
             price = 0.0
+
+        # Brand: designer_names (string) or designers (list) or designer (legacy)
+        brand = item.get("designer_names", "")
+        if not brand:
+            designers = item.get("designers", [])
+            if designers:
+                brand = ", ".join(str(d) for d in designers)
+            else:
+                brand = item.get("designer", item.get("brand", ""))
+
+        # Seller info from nested user dict
+        user = item.get("user", {})
+        seller_name = ""
+        seller_rating = 0.0
+        if isinstance(user, dict):
+            seller_name = user.get("username", "")
+            score = user.get("seller_score", {})
+            if isinstance(score, dict):
+                seller_rating = float(score.get("rating_average", 0))
+
+        # URL: construct from ID if not provided
+        url = item.get("url", "")
+        if not url and item.get("id"):
+            url = f"https://www.grailed.com/listings/{item['id']}"
+
+        return MarketplaceItem(
+            item_id=str(item.get("id", item.get("listing_id", ""))),
+            marketplace="grailed",
+            title=item.get("title", item.get("name", "")),
+            url=url,
+            price=price,
+            currency="USD",  # Grailed is USD-only
+            brand=brand,
+            size=item.get("size", ""),
+            color=item.get("color", ""),
+            image_url=item.get("image_url", item.get("image", item.get("cover_photo", ""))),
+            condition=item.get("condition", ""),
+            category=item.get("category_path", item.get("category", "")),
+            seller_name=seller_name,
+            seller_rating=seller_rating,
+            favorites=int(item.get("follower_count", 0)),
+            location=item.get("location", ""),
+            listed_at=item.get("created_at", ""),
+            shipping_price=float(
+                item.get("shipping", {}).get("us", {}).get("amount", 0)
+            ) if isinstance(item.get("shipping"), dict) else 0.0,
+        )
+
+    def _parse_ebay_result(self, item: dict) -> MarketplaceItem:
+        """Parse dtrungtin/ebay-items-scraper output.
+
+        Real API response keys (verified 2026-02-28):
+        itemNumber, title, url, price (float), priceWithCurrency (str),
+        wasPrice, wasPriceWithCurrency, condition, brand, type,
+        seller, itemLocation, image, images[], categories[],
+        sold (int), available (int), shipsTo, excludesShipping,
+        lastUpdated, subTitle, ean, mpn, upc
+        """
+        try:
+            price = float(item.get("price", 0))
+        except (ValueError, TypeError):
+            price = 0.0
+
+        # Extract currency from priceWithCurrency (e.g. "US $109.90" → "USD")
+        currency = item.get("currency", "USD")
+        price_with_currency = item.get("priceWithCurrency", "")
+        if not currency and price_with_currency:
+            if price_with_currency.startswith("US "):
+                currency = "USD"
+            elif "£" in price_with_currency:
+                currency = "GBP"
+            elif "€" in price_with_currency:
+                currency = "EUR"
+
+        # Image URLs list
+        image_urls = item.get("images", [])
+
         return MarketplaceItem(
             item_id=str(item.get("itemNumber", item.get("id", ""))),
             marketplace="ebay",
             title=item.get("title", ""),
             url=item.get("url", item.get("link", "")),
             price=price,
-            currency=item.get("currency", "USD"),
+            currency=currency,
             brand=item.get("brand", ""),
             condition=item.get("condition", item.get("type", "")),
             image_url=item.get("image", item.get("thumbnailUrl", "")),
+            image_urls=image_urls if image_urls else [],
             seller_name=item.get("seller", ""),
             location=item.get("itemLocation", ""),
+            favorites=int(item.get("sold", 0)),  # Use 'sold' as popularity proxy
         )
 
     def _parse_vestiaire_result(self, item: dict) -> MarketplaceItem:

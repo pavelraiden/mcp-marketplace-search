@@ -598,26 +598,58 @@ class TestApifyProvider:
         assert item.seller_name == "simple_string_user"
 
     def test_parse_grailed_result(self):
+        """Test Grailed parser with real API response keys (verified 2026-02-28)."""
         p = ApifyProvider()
         raw = {
             "id": 67890,
             "title": "Rick Owens DRKSHDW",
             "url": "https://www.grailed.com/listings/67890",
-            "price": 350.0,
-            "currency": "USD",
-            "designer": "Rick Owens",
+            "price": 350,
+            "designer_names": "Rick Owens",
+            "designers": ["Rick Owens"],
             "size": "M",
-            "image": "https://img.grailed.com/photo.jpg",
+            "image_url": "https://img.grailed.com/photo.jpg",
             "condition": "like_new",
-            "seller": {"username": "archive_dealer"},
+            "color": "black",
+            "category_path": "tops/sweaters",
+            "user": {"username": "archive_dealer", "seller_score": {"rating_average": 4.8}},
+            "follower_count": 12,
+            "location": "New York, NY",
+            "shipping": {"us": {"amount": 10.0}},
+            "created_at": "2026-02-20T10:00:00Z",
         }
         item = p._parse_grailed_result(raw)
         assert item.item_id == "67890"
         assert item.marketplace == "grailed"
         assert item.title == "Rick Owens DRKSHDW"
         assert item.price == 350.0
+        assert item.currency == "USD"
         assert item.brand == "Rick Owens"
         assert item.seller_name == "archive_dealer"
+        assert item.seller_rating == 4.8
+        assert item.size == "M"
+        assert item.color == "black"
+        assert item.condition == "like_new"
+        assert item.image_url == "https://img.grailed.com/photo.jpg"
+        assert item.favorites == 12
+        assert item.location == "New York, NY"
+        assert item.listed_at == "2026-02-20T10:00:00Z"
+
+    def test_parse_grailed_result_designer_fallback(self):
+        """Test Grailed parser falls back to designers list if designer_names empty."""
+        p = ApifyProvider()
+        raw = {
+            "id": 99999,
+            "title": "Vintage Jacket",
+            "price": 100,
+            "designer_names": "",
+            "designers": ["Comme des Garçons", "Junya Watanabe"],
+            "user": {"username": "seller1"},
+        }
+        item = p._parse_grailed_result(raw)
+        assert item.brand == "Comme des Garçons, Junya Watanabe"
+        assert item.seller_name == "seller1"
+        assert item.url == "https://www.grailed.com/listings/99999"
 
     def test_parse_generic_result(self):
         p = ApifyProvider()
@@ -721,25 +753,42 @@ class TestApifyProvider:
         assert "ebay.co.uk" in inp["startUrls"][0]["url"]
 
     def test_parse_ebay_result(self):
+        """Test eBay parser with real API response keys (verified 2026-02-28)."""
         p = ApifyProvider()
         raw = {
-            "itemNumber": "123456789",
-            "title": "Nike Air Max 90 White",
-            "url": "https://www.ebay.com/itm/123456789",
-            "price": 89.99,
-            "currency": "USD",
+            "itemNumber": 366211244299,
+            "title": "Nike Air Max 2017 Shoes Triple Black",
+            "url": "https://www.ebay.com/itm/366211244299",
+            "price": 109.9,
+            "priceWithCurrency": "US $109.90",
+            "wasPrice": 112.99,
+            "wasPriceWithCurrency": "US $112.99",
             "brand": "Nike",
-            "condition": "New",
-            "image": "https://i.ebayimg.com/photo.jpg",
-            "seller": "shoe_dealer",
-            "itemLocation": "New York, US",
+            "condition": "New with box",
+            "image": "https://i.ebayimg.com/images/g/mrY/s-l1000.webp",
+            "images": [
+                "https://i.ebayimg.com/images/g/mrY/s-l1000.webp",
+                "https://i.ebayimg.com/images/g/lMA/s-l1000.webp",
+            ],
+            "seller": "Next Pair Co",
+            "itemLocation": "Cornelia, GA, United States",
+            "categories": ["Athletic Shoes"],
+            "sold": 24,
+            "available": 7,
+            "type": "Athletic",
         }
         item = p._parse_ebay_result(raw)
-        assert item.item_id == "123456789"
+        assert item.item_id == "366211244299"
         assert item.marketplace == "ebay"
-        assert item.price == 89.99
+        assert item.price == 109.9
+        assert item.currency == "USD"
         assert item.brand == "Nike"
-        assert item.seller_name == "shoe_dealer"
+        assert item.seller_name == "Next Pair Co"
+        assert item.condition == "New with box"
+        assert item.location == "Cornelia, GA, United States"
+        assert item.image_url == "https://i.ebayimg.com/images/g/mrY/s-l1000.webp"
+        assert len(item.image_urls) == 2
+        assert item.favorites == 24  # sold count as popularity
 
     # --- Vestiaire actor input/parser tests ---
 

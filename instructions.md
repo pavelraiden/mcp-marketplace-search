@@ -42,11 +42,11 @@ uv run --with pytest --with pytest-cov pytest tests/ -v --cov=server --cov-repor
 
 | File | Tests | Coverage |
 |:-----|------:|:---------|
-| test_types.py | 20 | Enums, dataclasses, defaults, mutable safety |
+| test_types.py | 23 | Enums, dataclasses, defaults, mutable safety, SearchResult.error |
 | test_db.py | 19 | CRUD, history, stats, cleanup, threads, singleton |
-| test_providers.py | 87 | Health, registry, routing, instantiation, behavior, ApifyProvider (8 actors, 30+ new) |
+| test_providers.py | 92 | Health, registry, routing, instantiation, behavior, ApifyProvider (8 actors), graceful errors, real API parsers |
 | test_tools.py | 9 | Formatting, registration, search mocking |
-| **Total** | **154** | **All passing** |
+| **Total** | **162** | **All passing** |
 
 ## Marketplaces
 
@@ -219,6 +219,8 @@ This MCP server is the **search infrastructure** for VintedFlip project.
   - `99289d4` — feat: ApifyProvider as cloud scraping fallback (v1.2)
   - `b9ff83b` — feat: expand ApifyProvider to 8 actors, add Allegro/OLX/StockX (v1.3)
   - `7aaf866` — fix: update stale test counts, add APIFY_API_TOKEN to configs
+  - `0f2e19e` — feat: add global ROADMAP.md, fix main.py docstring and tool count
+  - `c50f985` — fix: real API validation — graceful errors, Vestiaire parser (v1.4-dev)
 
 ## Created
 
@@ -228,3 +230,4 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - **Deep audit:** Session 10 (108 tests, bug fixes, git init)
 - **Apify provider:** Session 11 (ApifyProvider + 22 tests, 130 total)
 - **Apify expansion:** Session 12 (8 actors, 3 new marketplaces, 154 total tests)
+- **Real API validation:** Session 13 (5 bugs fixed, Vestiaire verified, 161 tests)

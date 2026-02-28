@@ -1,6 +1,6 @@
 # PROJECT ROADMAP: MCP Marketplace Search Server
 
-> **Version:** 1.3.0
+> **Version:** 1.4.0-dev
 > **Last Updated:** 2026-02-28
 > **Status:** Development
 > **Language:** Ukrainian (UA)
@@ -93,24 +93,29 @@ Multi-marketplace search engine integrated into Claude Code/Desktop, that allows
 | Knowledge K110 created | ✅ Done | Apify patterns for future reference |
 | Config files updated | ✅ Done | .mcp.json + claude_desktop_config.json |
 
-### Phase 3: Real API Integration (CURRENT 🔄)
-**Period:** 2026-02-28 — ...
+### Phase 3: Real API Integration (IN PROGRESS 🔄)
+**Period:** 2026-02-28
 **Goal:** Make the server actually WORK with real Apify API
 
 | Task | Status | Details |
 |:-----|:------:|:--------|
-| Configure APIFY_API_TOKEN in claude_desktop_config.json | 🔄 Pending | Need user's token from console.apify.com |
-| Verify MCP server starts without errors | 🔄 In Progress | Test startup, tool registration |
-| Test real Apify search (Vinted) | ⬜ Planned | First real end-to-end test |
-| Test real Apify search (eBay) | ⬜ Planned | Verify parser handles real JSON |
-| Test real Apify search (Grailed) | ⬜ Planned | URL-based actor input |
-| Test real Apify search (Allegro) | ⬜ Planned | CEE marketplace |
-| Test real Apify search (StockX) | ⬜ Planned | Sneaker marketplace |
-| Fix parser bugs from real data | ⬜ Planned | Inevitable — real JSON ≠ mock JSON |
-| Test search_all (multi-marketplace) | ⬜ Planned | Parallel search across 3+ marketplaces |
+| Configure APIFY_API_TOKEN in claude_desktop_config.json | ✅ Done | Token from VintedFlip .env configured |
+| Verify MCP server starts without errors | ✅ Done | 16 tools registered, no startup errors |
+| Fix Apify API bugs (tilde, auth, startUrl) | ✅ Done | 4 bugs found and fixed via real testing |
+| Graceful error handling (403, timeout, network) | ✅ Done | SearchResult.error field, no crashes |
+| Test real Apify search (Vestiaire) | ✅ Done | 3 real items returned, all fields parsed correctly |
+| Update Vestiaire parser from real JSON | ✅ Done | productName, brandName, priceCurrency etc. |
+| Test real Apify search (Depop) | ❌ Blocked | Actor returns `_fallback: true`, both actors broken |
+| Test real Apify search (Vinted) | ⬜ Blocked | Actor not rented by user |
+| Test real Apify search (eBay) | ✅ Done | 5 real items, 10s response, itemNumber/seller/sold/images parsed |
+| Update eBay parser from real JSON | ✅ Done | images[], sold, priceWithCurrency, categories[] |
+| Test real Apify search (Grailed) | ✅ Done | 5 real items, 15s response, designer_names/user/shipping parsed |
+| Update Grailed parser from real JSON | ✅ Done | user.seller_score, follower_count, shipping.us.amount etc. |
+| Test real Apify search (Allegro) | ⬜ Blocked | Actor not rented by user |
+| Test real Apify search (StockX) | ⬜ Blocked | Actor not rented by user |
+| Test search_all (multi-marketplace) | ⬜ Planned | Parallel search across 3 rented actors |
 | Test search_smart (auto-routing) | ⬜ Planned | Category → marketplace chain |
-| Integration tests with real endpoints | ⬜ Planned | Separate test file, skippable |
-| Update parsers based on real data | ⬜ Planned | Fix field names, handle edge cases |
+| Update remaining parsers from real data | ⬜ Planned | Allegro, OLX, StockX when rented |
 
 ### Phase 4: Production Hardening
 **Period:** After Phase 3
@@ -239,11 +244,11 @@ BaseMarketplaceProvider (abstract)
 ```
 Phase 1 (Foundation):      ████████████████████ 100%  ✅
 Phase 2 (Apify Expansion): ████████████████████ 100%  ✅
-Phase 3 (Real API):        ██░░░░░░░░░░░░░░░░░░  10%  🔄
+Phase 3 (Real API):        ████████████████░░░░  70%  🔄 (Vestiaire ✅, Grailed ✅, eBay ✅ — 3/8 actors verified)
 Phase 4 (Hardening):       ░░░░░░░░░░░░░░░░░░░░   0%  ⬜
 Phase 5 (Intelligence):    ░░░░░░░░░░░░░░░░░░░░   0%  ⬜
 
-Total Progress:            ████████░░░░░░░░░░░░  42%
+Total Progress:            ████████████░░░░░░░░  54%
 ```
 
 ---
