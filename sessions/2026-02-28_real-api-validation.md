@@ -153,6 +153,45 @@
 - `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
 - `23dbe50` — fix: search_smart per-marketplace Apify routing
 
+#### TASK 13: list_marketplaces Improvement
+- Rewrote list_marketplaces to show Apify cloud status per marketplace
+- Shows "✅ Direct", "☁️ Apify", or "❌ Offline" per marketplace
+- Shows Apify-only marketplaces (Allegro, OLX, StockX)
+- Shows Apify Cloud Scraping section with actor count and usage instructions
+
+#### TASK 14: compare_prices Apify Fallback (CRITICAL FIX)
+- BUG: compare_prices only used direct providers — ALL offline without API keys
+- FIX: Added Apify fallback discovery, parallel search with 120s timeout
+- Added "best average price" indicator to output
+- Shows error messages for marketplaces that fail (actor not rented, etc.)
+
+### Git Commits (Session 4 continued)
+- `0f2e19e` — feat: add global ROADMAP.md, fix main.py docstring and tool count
+- `c50f985` — fix: real API validation — graceful errors, Vestiaire parser, timeout increase
+- `6bb80e4` — feat: Grailed + eBay parser rewrite from real API data
+- `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
+- `23dbe50` — fix: search_smart per-marketplace Apify routing
+- `53c10b6` — docs: session log + instructions update
+- `4f182ff` — feat: improve list_marketplaces to show Apify cloud status
+- `0042ab2` — fix: compare_prices Apify fallback for cross-marketplace comparison
+
+### Current State (Updated)
+- **Phase 1 (Core):** DONE ✅
+- **Phase 2 (Apify Expansion):** DONE ✅
+- **Phase 3 (Real API):** 90% 🔄
+  - Vestiaire ✅ — parser verified with real API
+  - Grailed ✅ — parser verified with real API
+  - eBay ✅ — parser verified with real API
+  - search_all ✅ — parallel + Apify fallback
+  - search_smart ✅ — per-marketplace Apify routing
+  - compare_prices ✅ — Apify fallback + best price indicator
+  - list_marketplaces ✅ — shows Direct/Apify/Offline status
+  - Depop ❌ — both actors broken
+  - Vinted/Allegro/OLX/StockX ⬜ — actors not rented
+- **Tests:** 162/162 passing
+- **Working marketplaces:** 3/8 via Apify (Vestiaire, Grailed, eBay)
+- **GitHub:** pavelraiden/mcp-marketplace-search, 14 commits on master
+
 ### Key Patterns
 - **REAL API testing reveals everything** — 7+ bugs found that unit tests couldn't catch
 - **Parser keys ALWAYS differ from documentation** — test with real data, not assumptions
@@ -161,6 +200,17 @@
 - **Parallel search = 2x speedup** — 33s vs 68s sequential for 3 marketplaces
 - **search_smart needs per-marketplace Apify routing** — generic "apify" fallback is wrong
 - **Response times:** eBay ~16s, Grailed ~21s, Vestiaire ~31s
+- **ALL orchestrator tools must support Apify** — compare_prices was broken without it
+
+### User's Strategic Direction
+User wants to BUILD OWN SCRAPERS (like Vinted Cookie Factory + Playwright) for:
+- Grailed (HTTP + Algolia API — public keys)
+- eBay (Official free API)
+- Vestiaire (HTTP + Cookie)
+- Depop (HTTP API + session cookie)
+- OLX (HTTP + Playwright)
+And use Apify ONLY for hard anti-bot sites: StockX, Allegro.
+This is Phase 5 — "Own Scrapers" to reduce Apify dependency.
 
 ### Recovery Protocol
 1. Read this session log for context
@@ -168,4 +218,4 @@
 3. `uv run --with pytest --with pytest-cov pytest tests/ -v` — verify 162 tests pass
 4. Real search: `APIFY_API_TOKEN=<token> uv run --with httpx python -c "..."`
 5. Working actors: vestiaire, grailed, ebay. Broken: depop.
-6. Next: commit changes, test search_all orchestrator, or proceed to Phase 4
+6. Next: Phase 5 (own scrapers) or Phase 4 (production hardening)
