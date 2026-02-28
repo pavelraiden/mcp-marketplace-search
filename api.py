@@ -31,8 +31,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("marketplace.api")
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 
 from server.db import get_db
 from server.types import SearchParams
@@ -41,6 +42,26 @@ from server.providers import (
     get_health, get_all_health,
     VALID_MARKETPLACES, CATEGORY_ROUTING, MARKETPLACE_REGISTRY,
 )
+
+# ==========================================================================
+# API KEY AUTHENTICATION
+# ==========================================================================
+API_KEY = os.environ.get("MARKETPLACE_API_KEY", "")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    """Verify API key for all protected endpoints."""
+    if not API_KEY:
+        # No key configured = open access (dev mode)
+        return None
+    if not api_key or api_key != API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing API key. Set X-API-Key header.",
+        )
+    return api_key
+
 
 app = FastAPI(
     title="Marketplace Search API",
@@ -107,6 +128,7 @@ def search_marketplace(
     size: str = "",
     sort: str = "relevance",
     limit: int = Query(20, ge=1, le=100),
+    _key: str = Depends(verify_api_key),
 ):
     """Search a specific marketplace."""
     providers = get_providers()
@@ -185,6 +207,7 @@ def search_all(
     max_price: float = 0,
     marketplaces: str = "",
     limit: int = Query(10, ge=1, le=50),
+    _key: str = Depends(verify_api_key),
 ):
     """Search multiple marketplaces in parallel."""
     providers = get_providers()
@@ -273,6 +296,7 @@ def search_smart(
     min_price: float = 0,
     max_price: float = 0,
     limit: int = Query(20, ge=1, le=100),
+    _key: str = Depends(verify_api_key),
 ):
     """Smart-route search to best marketplace for category."""
     if category not in CATEGORY_ROUTING:
@@ -335,6 +359,7 @@ def compare_prices(
     query: str = Query(..., min_length=1),
     brand: str = "",
     marketplaces: str = "",
+    _key: str = Depends(verify_api_key),
 ):
     """Compare prices across multiple marketplaces."""
     providers = get_providers()
@@ -396,7 +421,7 @@ def compare_prices(
 
 
 @app.get("/marketplaces")
-def list_marketplaces():
+def list_marketplaces(_key: str = Depends(verify_api_key)):
     """List all available marketplaces with status."""
     providers = get_providers()
     available = get_available_providers()
@@ -435,7 +460,7 @@ def list_marketplaces():
 
 
 @app.get("/history")
-def search_history(marketplace: str = "", limit: int = 20):
+def search_history(marketplace: str = "", limit: int = 20, _key: str = Depends(verify_api_key)):
     """View recent search history."""
     db = get_db()
     searches = db.get_search_history(marketplace=marketplace or None, limit=limit)
