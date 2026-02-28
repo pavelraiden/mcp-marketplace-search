@@ -91,15 +91,17 @@
 ### Current State
 - **Phase 1 (Core):** DONE ✅
 - **Phase 2 (Apify Expansion):** DONE ✅
-- **Phase 3 (Real API):** 70% 🔄
+- **Phase 3 (Real API):** 80% 🔄
   - Vestiaire ✅ — 3 items verified, parser rewritten
   - Grailed ✅ — 5 items verified, parser rewritten
   - eBay ✅ — 5 items verified, parser enhanced
+  - search_all ✅ — parallel multi-marketplace search (33s for 3 marketplaces)
+  - search_smart ✅ — per-marketplace Apify routing (shoes→vinted, luxury→vestiaire)
   - Depop ❌ — both actors broken (fallback response)
-  - Vinted ⬜ — actor not rented
-  - Allegro/OLX/StockX ⬜ — actors not rented
+  - Vinted/Allegro/OLX/StockX ⬜ — actors not rented
 - **Tests:** 162/162 passing
 - **Working marketplaces:** 3/8 via Apify (Vestiaire, Grailed, eBay)
+- **GitHub:** pavelraiden/mcp-marketplace-search, 11 commits on master
 
 ### Infrastructure
 
@@ -125,11 +127,39 @@
 | ERR-016 | 2026-02-28 | Grailed: `designer_names` not `designer`, `user` not `seller` | Different actors use completely different JSON schemas |
 | ERR-017 | 2026-02-28 | Depop actors broken (both return _fallback) | Have alternative actors documented, graceful error handling |
 
+#### TASK 10: search_all Apify Fallback
+- Rewrote search_all to auto-discover Apify-supported marketplaces
+- If direct provider unavailable → fallback to ApifyProvider cloud actor
+- Timeout 45s → 120s for real Apify response times
+- max_workers capped at 5 for Apify rate limiting
+- Tested: eBay + Grailed + Vestiaire parallel = 33s, 9 items
+
+#### TASK 11: search_smart Routing Bug Fix
+- BUG: search_smart with "apify" fallback always defaulted to Vinted
+- ROOT CAUSE: generic "apify" in CATEGORY_ROUTING, ApifyProvider defaults to vinted
+- FIX: search_smart now iterates routing chain per-marketplace, uses Apify with correct target
+- Verified: shoes→vinted, luxury→vestiaire, streetwear→grailed, electronics→ebay
+
+#### TASK 12: Knowledge K110 Update
+- Updated K110 with real API lessons: tilde URLs, query param auth, parser key mapping
+- Added parser keys comparison table (guessed vs real for 3 marketplaces)
+- Added 5 new anti-patterns from real API validation
+- Added parallel search architecture pattern
+
+### Git Commits
+- `0f2e19e` — feat: add global ROADMAP.md, fix main.py docstring and tool count
+- `c50f985` — fix: real API validation — graceful errors, Vestiaire parser, timeout increase
+- `6bb80e4` — feat: Grailed + eBay parser rewrite from real API data
+- `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
+- `23dbe50` — fix: search_smart per-marketplace Apify routing
+
 ### Key Patterns
-- **REAL API testing reveals everything** — 7 bugs found that unit tests couldn't catch
+- **REAL API testing reveals everything** — 7+ bugs found that unit tests couldn't catch
 - **Parser keys ALWAYS differ from documentation** — test with real data, not assumptions
 - **Each actor has unique JSON schema** — no standardization across Apify actors
 - **Price comparison works** — same item varies 2-5x across marketplaces (profit opportunity!)
+- **Parallel search = 2x speedup** — 33s vs 68s sequential for 3 marketplaces
+- **search_smart needs per-marketplace Apify routing** — generic "apify" fallback is wrong
 - **Response times:** eBay ~16s, Grailed ~21s, Vestiaire ~31s
 
 ### Recovery Protocol

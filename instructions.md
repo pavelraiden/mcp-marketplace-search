@@ -221,6 +221,8 @@ This MCP server is the **search infrastructure** for VintedFlip project.
   - `7aaf866` — fix: update stale test counts, add APIFY_API_TOKEN to configs
   - `0f2e19e` — feat: add global ROADMAP.md, fix main.py docstring and tool count
   - `c50f985` — fix: real API validation — graceful errors, Vestiaire parser (v1.4-dev)
+  - `6bb80e4` — feat: Grailed + eBay parser rewrite from real API data
+  - `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
 
 ## Created
 
@@ -231,3 +233,4 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - **Apify provider:** Session 11 (ApifyProvider + 22 tests, 130 total)
 - **Apify expansion:** Session 12 (8 actors, 3 new marketplaces, 154 total tests)
 - **Real API validation:** Session 13 (5 bugs fixed, Vestiaire verified, 161 tests)
+- **Multi-marketplace verified:** Session 14 (Grailed + eBay verified, search_all working, 162 tests)
