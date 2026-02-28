@@ -954,39 +954,79 @@ def register_tools(mcp: FastMCP):
     @mcp.tool()
     def list_marketplaces() -> str:
         """List all available marketplaces with configuration status.
-        Shows which marketplaces are configured, their capabilities, and auth requirements."""
+        Shows which marketplaces have direct providers, which are available
+        via Apify cloud actors, and their capabilities."""
         providers = get_providers()
         available = get_available_providers()
 
+        # Check Apify availability
+        apify_provider = providers.get("apify")
+        apify_available = apify_provider and apify_provider.is_available()
+        apify_marketplaces = (
+            apify_provider.get_supported_marketplaces() if apify_available else []
+        )
+
+        # Count all searchable marketplaces (direct + Apify)
+        all_searchable = set(available)
+        if apify_available:
+            all_searchable |= set(apify_marketplaces)
+        all_searchable.discard("apify")  # Don't count meta-provider
+
         output = "# Available Marketplaces\n\n"
-        output += f"**Configured:** {len(available)}/{len(providers)}\n\n"
+        output += f"**Searchable:** {len(all_searchable)} marketplaces\n"
+        output += f"**Direct providers:** {len(available)}/{len(providers)} configured\n"
+        if apify_available:
+            output += f"**Apify cloud:** {len(apify_marketplaces)} actors available\n"
+        output += "\n"
 
+        # Show each marketplace with its access method
+        shown = set()
         for name, p in providers.items():
-            status = "✅" if p.is_available() else "❌"
-            cap = MARKETPLACE_REGISTRY.get(name)
+            if name == "apify":
+                continue  # Show Apify section separately
+            shown.add(name)
 
-            output += f"### {status} {p.display_name} (`{name}`)\n"
-            output += f"- **Auth:** `{p.api_key_env}` "
-            output += f"({'set ✅' if p.is_available() else 'NOT SET ❌'})\n"
+            direct_ok = p.is_available()
+            apify_ok = name in apify_marketplaces and apify_available
+
+            if direct_ok:
+                status = "✅ Direct"
+            elif apify_ok:
+                status = "☁️ Apify"
+            else:
+                status = "❌ Offline"
+
+            cap = MARKETPLACE_REGISTRY.get(name)
+            output += f"### {status} — {p.display_name} (`{name}`)\n"
 
             if cap:
                 output += f"- **Categories:** {', '.join(cap.categories)}\n"
                 output += f"- **Regions:** {', '.join(cap.regions)}\n"
-                output += f"- **API:** {'Official' if cap.has_api else 'Scraping'}\n"
-                output += f"- **Rate limit:** {cap.rate_limit_rpm} requests/min\n"
                 output += f"- **Strengths:** {', '.join(cap.strengths)}\n"
-                if cap.notes:
-                    output += f"- **Notes:** {cap.notes}\n"
             output += "\n"
 
-        # Setup instructions
-        output += "## Setup\n\n"
-        output += "Add API keys as environment variables:\n"
-        output += "```\n"
-        for name, p in providers.items():
-            cap = MARKETPLACE_REGISTRY.get(name)
-            auth = cap.requires_auth if cap else "?"
-            output += f"{p.api_key_env}=<your_{auth}>  # {p.display_name}\n"
-        output += "```\n"
+        # Show Apify-only marketplaces
+        for mp_name in apify_marketplaces:
+            if mp_name not in shown:
+                cap = MARKETPLACE_REGISTRY.get(mp_name)
+                display = cap.notes if cap else mp_name.capitalize()
+                output += f"### ☁️ Apify — {mp_name.capitalize()} (`{mp_name}`)\n"
+                if cap:
+                    output += f"- **Categories:** {', '.join(cap.categories)}\n"
+                    output += f"- **Regions:** {', '.join(cap.regions)}\n"
+                    output += f"- **Strengths:** {', '.join(cap.strengths)}\n"
+                output += "\n"
+
+        # Apify section
+        if apify_available:
+            output += "## Apify Cloud Scraping\n\n"
+            output += f"**Status:** ✅ Configured (APIFY_API_TOKEN set)\n"
+            output += f"**Actors:** {len(apify_marketplaces)} ({', '.join(apify_marketplaces)})\n"
+            output += f"**Usage:** `search_apify(query, target_marketplace)` or `search_all(query)`\n"
+        else:
+            output += "## Apify Cloud Scraping\n\n"
+            output += "**Status:** ❌ Not configured\n"
+            output += "Set `APIFY_API_TOKEN` to enable cloud scraping for all marketplaces.\n"
+            output += "Get token: https://console.apify.com/account/integrations\n"
 
         return output
