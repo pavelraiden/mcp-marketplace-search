@@ -212,10 +212,84 @@ User wants to BUILD OWN SCRAPERS (like Vinted Cookie Factory + Playwright) for:
 And use Apify ONLY for hard anti-bot sites: StockX, Allegro.
 This is Phase 5 — "Own Scrapers" to reduce Apify dependency.
 
+#### TASK 15: FastAPI HTTP API + Docker Deployment
+- Created `api.py`: 7 HTTP endpoints wrapping marketplace search engine
+  - GET /health, /search/{mp}, /search-all, /search-smart, /compare, /marketplaces, /history
+- Created `Dockerfile`: Python 3.12-slim, uvicorn 2 workers, healthcheck
+- Created `docker-compose.prod.yml`: persistent volume for SQLite
+- Created `.env.example`, `.dockerignore`
+- Local test with FastAPI TestClient: health, marketplaces, history — all 200 OK
+
+#### TASK 16: Server Provisioning
+- Created DigitalOcean droplet: `marketplace-search-eu` (ID: 555054770)
+- **IP: 157.230.115.65**, fra1 (Frankfurt EU), s-2vcpu-4gb, Ubuntu 24.04
+- Installed: Docker 28.2.2, Python 3.12.3, UFW (22/80/443/8000), fail2ban
+- Backups enabled
+- SSH key: `nexus_server` (same as nexus-platform)
+
+#### TASK 17: Production Deployment
+- `git clone` on server → `/opt/mcp-marketplace-search/`
+- `.env` created with APIFY_API_TOKEN
+- `docker compose -f docker-compose.prod.yml up -d --build` — SUCCESS
+- Container `marketplace-api` status: **Up, healthy**
+- RAM usage: 677MB / 3.8GB (18%)
+- Disk: 3.2GB / 77GB (5%)
+
+#### TASK 18: Real API Verification on Server
+- **eBay search:** `curl http://157.230.115.65:8000/search/ebay?query=nike+air+max&limit=3`
+  - 3 items, 17s, Nike Air Max $82-$150
+- **Grailed search:** `curl http://157.230.115.65:8000/search/grailed?query=rick+owens&limit=3`
+  - 3 items, 60s, Rick Owens $180-$500, with photos and seller ratings
+- **ALL WORKING END-TO-END ON SERVER** ✅
+
+### Git Commits (Session 4 final)
+- `0f2e19e` — feat: add global ROADMAP.md, fix main.py docstring and tool count
+- `c50f985` — fix: real API validation — graceful errors, Vestiaire parser, timeout increase
+- `6bb80e4` — feat: Grailed + eBay parser rewrite from real API data
+- `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
+- `23dbe50` — fix: search_smart per-marketplace Apify routing
+- `53c10b6` — docs: session log + instructions update
+- `4f182ff` — feat: improve list_marketplaces to show Apify cloud status
+- `0042ab2` — fix: compare_prices Apify fallback for cross-marketplace comparison
+- `9259be5` — docs: update session log with tasks 13-14
+- `6c6977e` — feat: add FastAPI HTTP API + Docker deployment
+
+### Current State (Final)
+- **Phase 1 (Core):** DONE ✅
+- **Phase 2 (Apify Expansion):** DONE ✅
+- **Phase 3 (Real API):** 95% ✅
+  - Vestiaire ✅, Grailed ✅, eBay ✅ — all verified on server
+  - search_all, search_smart, compare_prices — Apify-aware ✅
+  - list_marketplaces — cloud status ✅
+  - Depop ❌ — both actors broken
+  - Vinted/Allegro/OLX/StockX ⬜ — actors not rented
+- **Phase 4 (Deployment):** DONE ✅
+  - FastAPI HTTP API: 7 endpoints
+  - Docker: container healthy on 157.230.115.65
+  - Real API tested from server: eBay + Grailed working
+- **Tests:** 162/162 passing
+- **GitHub:** pavelraiden/mcp-marketplace-search, 17 commits on master
+
+### Infrastructure
+
+| Resource | Value |
+|:---------|:------|
+| Server | 157.230.115.65 (fra1, s-2vcpu-4gb, DO ID: 555054770) |
+| API URL | http://157.230.115.65:8000 |
+| Container | marketplace-api (healthy) |
+| Docker | 28.2.2 + compose v2 |
+| RAM | 677MB / 3.8GB (18%) |
+| Disk | 3.2GB / 77GB (5%) |
+| Repo | pavelraiden/mcp-marketplace-search (private) |
+| Branch | master |
+| Apify | 8 actors, 3 rented (eBay, Grailed, Vestiaire) |
+
 ### Recovery Protocol
 1. Read this session log for context
-2. `cd "C:/CLAUDE MAIN FOLDER/projects/mcp-marketplace-search"`
-3. `uv run --with pytest --with pytest-cov pytest tests/ -v` — verify 162 tests pass
-4. Real search: `APIFY_API_TOKEN=<token> uv run --with httpx python -c "..."`
-5. Working actors: vestiaire, grailed, ebay. Broken: depop.
-6. Next: Phase 5 (own scrapers) or Phase 4 (production hardening)
+2. **Server:** `ssh -i ~/.ssh/nexus_server root@157.230.115.65`
+3. **Project:** `/opt/mcp-marketplace-search/`
+4. **Container logs:** `docker logs marketplace-api`
+5. **Rebuild:** `cd /opt/mcp-marketplace-search && git pull && docker compose -f docker-compose.prod.yml up -d --build`
+6. **Health check:** `curl http://157.230.115.65:8000/health`
+7. **Local tests:** `uv run --with pytest pytest tests/ -v` — 162 tests
+8. **APIFY_API_TOKEN:** in `/opt/mcp-marketplace-search/.env`

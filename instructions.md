@@ -195,12 +195,16 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - [ ] Wallapop (Spain/EU)
 - [ ] Template: `docs/adding-marketplace.md` with step-by-step
 
-### v1.5 — Deploy & Production
-- [ ] Docker container + compose
-- [ ] Deploy to user's server (root access available)
-- [ ] Health monitoring endpoint
-- [ ] Data retention / cleanup job
-- [ ] Structured logging (JSON)
+### v1.5 — Deploy & Production (DONE ✅)
+- [x] FastAPI HTTP API wrapper (api.py — 7 endpoints)
+- [x] Docker container + compose
+- [x] Deploy to server: `157.230.115.65:8000` (fra1, s-2vcpu-4gb)
+- [x] Health monitoring endpoint (/health)
+- [x] UFW + fail2ban security
+- [x] Backups enabled
+- [ ] Data retention / cleanup job (TODO)
+- [ ] Structured logging (TODO)
+- [ ] HTTPS with Caddy/nginx (TODO)
 
 ### v2.0 — Intelligence
 - [ ] Price trend analysis (historical data from SQLite)
@@ -223,6 +227,26 @@ This MCP server is the **search infrastructure** for VintedFlip project.
   - `c50f985` — fix: real API validation — graceful errors, Vestiaire parser (v1.4-dev)
   - `6bb80e4` — feat: Grailed + eBay parser rewrite from real API data
   - `51a6d82` — feat: search_all Apify fallback, parallel multi-marketplace search
+  - `23dbe50` — fix: search_smart per-marketplace Apify routing
+  - `4f182ff` — feat: improve list_marketplaces to show Apify cloud status
+  - `0042ab2` — fix: compare_prices Apify fallback for cross-marketplace comparison
+  - `6c6977e` — feat: add FastAPI HTTP API + Docker deployment
+
+## Server (Production)
+
+| Resource | Value |
+|:---------|:------|
+| IP | 157.230.115.65 |
+| API URL | http://157.230.115.65:8000 |
+| DO ID | 555054770 |
+| Region | fra1 (Frankfurt EU) |
+| Size | s-2vcpu-4gb ($24/mo) |
+| OS | Ubuntu 24.04 |
+| Docker | 28.2.2 |
+| Project Path | /opt/mcp-marketplace-search/ |
+| Container | marketplace-api (healthy) |
+| SSH | `ssh -i ~/.ssh/nexus_server root@157.230.115.65` |
+| Rebuild | `cd /opt/mcp-marketplace-search && git pull && docker compose -f docker-compose.prod.yml up -d --build` |
 
 ## Created
 
@@ -234,3 +258,4 @@ This MCP server is the **search infrastructure** for VintedFlip project.
 - **Apify expansion:** Session 12 (8 actors, 3 new marketplaces, 154 total tests)
 - **Real API validation:** Session 13 (5 bugs fixed, Vestiaire verified, 161 tests)
 - **Multi-marketplace verified:** Session 14 (Grailed + eBay verified, search_all working, 162 tests)
+- **Server deployed:** Session 15 (FastAPI API, Docker, 157.230.115.65:8000, real API on server verified)
