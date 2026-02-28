@@ -1509,7 +1509,7 @@ class ApifyProvider(BaseMarketplaceProvider):
             seller_name = user.get("username", "")
             score = user.get("seller_score", {})
             if isinstance(score, dict):
-                seller_rating = float(score.get("rating_average", 0))
+                seller_rating = float(score.get("rating_average") or 0)
 
         # URL: construct from ID if not provided
         url = item.get("url", "")
@@ -1531,7 +1531,7 @@ class ApifyProvider(BaseMarketplaceProvider):
             category=item.get("category_path", item.get("category", "")),
             seller_name=seller_name,
             seller_rating=seller_rating,
-            favorites=int(item.get("follower_count", 0)),
+            favorites=int(item.get("follower_count") or 0),
             location=item.get("location", ""),
             listed_at=item.get("created_at", ""),
             shipping_price=float(
@@ -1581,7 +1581,7 @@ class ApifyProvider(BaseMarketplaceProvider):
             image_urls=image_urls if image_urls else [],
             seller_name=item.get("seller", ""),
             location=item.get("itemLocation", ""),
-            favorites=int(item.get("sold", 0)),  # Use 'sold' as popularity proxy
+            favorites=int(item.get("sold") or 0),  # Use 'sold' as popularity proxy
         )
 
     def _parse_vestiaire_result(self, item: dict) -> MarketplaceItem:
@@ -1643,7 +1643,7 @@ class ApifyProvider(BaseMarketplaceProvider):
             image_url=image_url,
             image_urls=image_urls,
             seller_name=seller_name,
-            favorites=int(item.get("likes", 0)),
+            favorites=int(item.get("likes") or 0),
             location=location,
             color=", ".join(item.get("colors", [])) if item.get("colors") else "",
             category=item.get("modelName", ""),
